@@ -18,6 +18,11 @@ extension/media/webview.js.map
 extension/media/vendor/
 extension/assets/
 
+# Locally-installed agent skill copies (canonical source lives in skill/).
+.claude/
+.agents/
+.gemini/
+
 # OS / editor noise
 .DS_Store
 *.log
