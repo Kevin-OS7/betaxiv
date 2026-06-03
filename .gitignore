@@ -1,0 +1,23 @@
+# User PDFs and agent-generated summaries stay local (privacy: never leave the machine).
+papers/*
+!papers/.gitkeep
+.paper-reader/summaries/*
+!.paper-reader/summaries/.gitkeep
+
+# Extension build artifacts and deps.
+extension/node_modules/
+extension/dist/
+extension/out/
+extension/*.vsix
+extension/.vscode-test/
+extension/.vscode-test.*.json
+
+# Generated webview bundle + vendored PDF.js + bundled skill/schema (copied at build time).
+extension/media/webview.js
+extension/media/webview.js.map
+extension/media/vendor/
+extension/assets/
+
+# OS / editor noise
+.DS_Store
+*.log

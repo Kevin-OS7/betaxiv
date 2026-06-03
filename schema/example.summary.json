@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "1.0",
+  "paper": {
+    "sourcePath": "papers/attention-is-all-you-need.pdf",
+    "title": "Attention Is All You Need",
+    "authors": [
+      "Ashish Vaswani",
+      "Noam Shazeer",
+      "Niki Parmar",
+      "Jakob Uszkoreit",
+      "Llion Jones",
+      "Aidan N. Gomez",
+      "Łukasz Kaiser",
+      "Illia Polosukhin"
+    ],
+    "year": 2017,
+    "venue": "NeurIPS"
+  },
+  "summary": {
+    "tldr": "Introduces the Transformer, a sequence transduction architecture built entirely on attention, dropping recurrence and convolutions. It trains faster via parallelism and sets new state-of-the-art BLEU scores on English-to-German and English-to-French translation.",
+    "keyContributions": [
+      "A purely attention-based architecture (the Transformer) that removes recurrence and convolutions entirely.",
+      "Scaled dot-product attention and multi-head attention, letting the model jointly attend to information from different representation subspaces.",
+      "Positional encodings that inject order information without recurrence.",
+      "State-of-the-art translation quality with substantially less training time through parallelism."
+    ],
+    "sections": [
+      {
+        "heading": "1. Introduction",
+        "page": 1,
+        "points": [
+          "Recurrent models process sequentially, which prevents parallelization within training examples.",
+          "Attention mechanisms allow modeling dependencies without regard to distance in the sequence.",
+          "The Transformer relies entirely on attention to draw global dependencies between input and output."
+        ]
+      },
+      {
+        "heading": "3. Model Architecture",
+        "page": 2,
+        "points": [
+          "Encoder-decoder structure with stacked self-attention and point-wise feed-forward layers.",
+          "Encoder: 6 identical layers, each with multi-head self-attention and a feed-forward sub-layer, plus residual connections and layer normalization.",
+          "Decoder: adds a third sub-layer performing multi-head attention over the encoder output, with masking to preserve auto-regression."
+        ]
+      },
+      {
+        "heading": "3.2 Attention",
+        "page": 3,
+        "points": [
+          "Scaled dot-product attention computes softmax(QK^T / sqrt(d_k)) V.",
+          "Multi-head attention runs h parallel attention layers on linear projections of queries, keys, and values.",
+          "The scaling factor 1/sqrt(d_k) counteracts large dot products that push softmax into low-gradient regions."
+        ]
+      },
+      {
+        "heading": "5. Training",
+        "page": 7,
+        "points": [
+          "Trained on the WMT 2014 English-German (4.5M pairs) and English-French (36M pairs) datasets.",
+          "Used the Adam optimizer with a custom learning-rate warmup schedule.",
+          "Regularized with residual dropout and label smoothing."
+        ]
+      }
+    ],
+    "figures": [
+      {
+        "label": "Figure 1",
+        "caption": "The Transformer model architecture, showing the stacked encoder (left) and decoder (right).",
+        "page": 3
+      },
+      {
+        "label": "Figure 2",
+        "caption": "Scaled Dot-Product Attention (left) and Multi-Head Attention consisting of several attention layers running in parallel (right).",
+        "page": 4
+      },
+      {
+        "label": "Table 2",
+        "caption": "The Transformer achieves better BLEU scores than previous state-of-the-art models at a fraction of the training cost.",
+        "page": 8
+      }
+    ],
+    "glossary": [
+      {
+        "term": "Self-attention",
+        "definition": "An attention mechanism relating different positions of a single sequence to compute a representation of that sequence."
+      },
+      {
+        "term": "Multi-head attention",
+        "definition": "Running several attention functions in parallel on different learned projections, then concatenating their outputs."
+      },
+      {
+        "term": "Positional encoding",
+        "definition": "Sinusoidal signals added to token embeddings so the model can use sequence order without recurrence."
+      }
+    ],
+    "openQuestions": [
+      "How well does the Transformer generalize to modalities beyond text, such as images and audio?",
+      "Can attention be made more efficient for very long sequences where the quadratic cost dominates?"
+    ]
+  },
+  "generatedBy": {
+    "agent": "Claude Code",
+    "model": "claude-opus-4-8",
+    "timestamp": "2026-06-03T00:00:00Z"
+  }
+}

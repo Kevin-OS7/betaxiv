@@ -1,0 +1,17 @@
+# Source & build tooling — only dist/ and media/ ship.
+src/**
+out/**
+esbuild.js
+tsconfig.json
+tsconfig.test.json
+.vscode-test.mjs
+.vscode-test/**
+.vscode/**
+.gitignore
+**/*.map
+**/*.ts
+
+# Deps (bundled by esbuild; ajv is the only one, already in dist).
+node_modules/**
+
+# Keep: dist/**, media/** (webview.js, webview.css, vendor/pdfjs/**)
