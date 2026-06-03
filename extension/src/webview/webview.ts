@@ -62,7 +62,17 @@ async function renderPdf(
   try {
     // pdf.js is a vendored .mjs loaded from a local, CSP-pinned URI (not bundled).
     const pdfjsLib: any = await import(/* @vite-ignore */ libUri);
-    pdfjsLib.GlobalWorkerOptions.workerSrc = workerUri;
+
+    // VS Code serves webview resources from a different origin (vscode-cdn.net), and
+    // browsers refuse to spawn a Worker from a cross-origin URL — PDF.js silently falls
+    // back to a "fake worker" that parses on the main thread (catastrophically slow:
+    // ~30s for a 12-page paper). Fetch the worker code and wrap it in a same-origin blob
+    // URL so the real worker thread is used.
+    const workerCode = await (await fetch(workerUri)).text();
+    const workerBlobUrl = URL.createObjectURL(
+      new Blob([workerCode], { type: "text/javascript" })
+    );
+    pdfjsLib.GlobalWorkerOptions.workerSrc = workerBlobUrl;
 
     const doc = await pdfjsLib.getDocument({
       url: pdfUri,
@@ -75,32 +85,44 @@ async function renderPdf(
 
     const containerWidth = pdfPages.clientWidth || 600;
     const dpr = window.devicePixelRatio || 1;
+    const scaleFor = (baseWidth: number) => Math.min(2, (containerWidth - 16) / baseWidth);
 
-    // Lazy rendering: build correctly-sized placeholder slots up front (so scroll geometry
-    // is stable), then rasterize a page to canvas only when it nears the viewport, and
-    // release its canvas when it scrolls far away. This bounds memory on large PDFs
-    // regardless of retainContextWhenHidden.
+    // Lazy rendering: build placeholder slots up front (so scroll geometry is stable),
+    // then rasterize a page to canvas only when it nears the viewport, and release its
+    // canvas when it scrolls far away. This bounds memory on large PDFs regardless of
+    // retainContextWhenHidden.
+    //
+    // Critically, only page 1 is fetched (getPage) up front. The rest are fetched lazily
+    // inside renderSlot, so the time-to-first-page does NOT grow with the page count —
+    // placeholder slots use page 1's size as an estimate (papers have a uniform page size)
+    // and each slot's real size is corrected when it's actually rendered.
     interface Slot {
       el: HTMLElement;
-      page: any;
-      viewport: any;
+      pageNum: number;
+      page?: any;
+      viewport?: any;
       canvas?: HTMLCanvasElement;
       rendering?: boolean;
     }
+
+    const firstPage = await doc.getPage(1);
+    const base1 = firstPage.getViewport({ scale: 1 });
+    const vp1 = firstPage.getViewport({ scale: scaleFor(base1.width) });
+    const estWidth = `${Math.floor(vp1.width)}px`;
+    const estHeight = `${Math.floor(vp1.height)}px`;
+
     const slots: Slot[] = [];
-
     for (let i = 1; i <= doc.numPages; i++) {
-      const page = await doc.getPage(i);
-      const base = page.getViewport({ scale: 1 });
-      const scale = Math.min(2, (containerWidth - 16) / base.width);
-      const viewport = page.getViewport({ scale });
-
       const el = document.createElement("div");
       el.className = "page-slot";
-      el.style.width = `${Math.floor(viewport.width)}px`;
-      el.style.height = `${Math.floor(viewport.height)}px`;
+      el.style.width = estWidth;
+      el.style.height = estHeight;
       pdfPages.appendChild(el);
-      slots.push({ el, page, viewport });
+      slots.push(
+        i === 1
+          ? { el, pageNum: 1, page: firstPage, viewport: vp1 }
+          : { el, pageNum: i }
+      );
     }
 
     const MAX_RENDERED = 8; // soft cap on simultaneously rasterized pages
@@ -129,15 +151,24 @@ async function renderPdf(
     const renderSlot = async (slot: Slot) => {
       if (slot.canvas || slot.rendering) return;
       slot.rendering = true;
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d")!;
-      canvas.width = Math.floor(slot.viewport.width * dpr);
-      canvas.height = Math.floor(slot.viewport.height * dpr);
-      canvas.style.width = `${Math.floor(slot.viewport.width)}px`;
-      canvas.style.height = `${Math.floor(slot.viewport.height)}px`;
-      slot.el.replaceChildren(canvas);
-      slot.canvas = canvas;
       try {
+        // Lazily fetch the page (all but page 1) and derive its real viewport, then
+        // correct the placeholder size in case this page differs from the page-1 estimate.
+        if (!slot.page) slot.page = await doc.getPage(slot.pageNum);
+        if (!slot.viewport) {
+          const base = slot.page.getViewport({ scale: 1 });
+          slot.viewport = slot.page.getViewport({ scale: scaleFor(base.width) });
+          slot.el.style.width = `${Math.floor(slot.viewport.width)}px`;
+          slot.el.style.height = `${Math.floor(slot.viewport.height)}px`;
+        }
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d")!;
+        canvas.width = Math.floor(slot.viewport.width * dpr);
+        canvas.height = Math.floor(slot.viewport.height * dpr);
+        canvas.style.width = `${Math.floor(slot.viewport.width)}px`;
+        canvas.style.height = `${Math.floor(slot.viewport.height)}px`;
+        slot.el.replaceChildren(canvas);
+        slot.canvas = canvas;
         await slot.page.render({
           canvasContext: ctx,
           viewport: slot.viewport,
@@ -149,6 +180,10 @@ async function renderPdf(
         slot.rendering = false;
       }
     };
+
+    // Draw page 1 immediately, without waiting for the IntersectionObserver to fire its
+    // first tick — this is the user's time-to-first-page.
+    void renderSlot(slots[0]);
 
     const observer = new IntersectionObserver(
       (entries) => {
