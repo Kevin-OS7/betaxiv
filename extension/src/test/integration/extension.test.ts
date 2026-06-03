@@ -73,7 +73,7 @@ suite("Paper Reader extension", () => {
       const skillDir = vscode.Uri.joinPath(folder.uri, ".agents", "skills", "paper-summarizer");
       // Both the skill body and its co-located schema must land on disk.
       await vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "SKILL.md"));
-      await vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "summary.schema.v1.json"));
+      await vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "summary.schema.v2.json"));
     } finally {
       // Delete deepest-first; skip anything that pre-existed (don't clobber a real install).
       for (const chain of chains) {

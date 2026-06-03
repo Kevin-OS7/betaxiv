@@ -86,18 +86,18 @@ const webviewConfig = {
 function copyAssets() {
   const repoRoot = path.resolve(root, "..");
   const skillSrc = path.join(repoRoot, "skill", "paper-summarizer");
-  const schemaFile = path.join(repoRoot, "schema", "summary.schema.v1.json");
+  const schemaFile = path.join(repoRoot, "schema", "summary.schema.v2.json");
   const exampleFile = path.join(repoRoot, "schema", "example.summary.json");
 
   const skillDst = path.join(root, "assets", "skill", "paper-summarizer");
   fs.mkdirSync(skillDst, { recursive: true });
   fs.cpSync(skillSrc, skillDst, { recursive: true });
   // Co-locate the schema with the installed skill so it is self-contained in any workspace.
-  fs.copyFileSync(schemaFile, path.join(skillDst, "summary.schema.v1.json"));
+  fs.copyFileSync(schemaFile, path.join(skillDst, "summary.schema.v2.json"));
 
   const schemaDst = path.join(root, "assets", "schema");
   fs.mkdirSync(schemaDst, { recursive: true });
-  fs.copyFileSync(schemaFile, path.join(schemaDst, "summary.schema.v1.json"));
+  fs.copyFileSync(schemaFile, path.join(schemaDst, "summary.schema.v2.json"));
   fs.copyFileSync(exampleFile, path.join(schemaDst, "example.summary.json"));
 
   console.log("[assets] vendored skill/paper-summarizer + schema -> assets/");

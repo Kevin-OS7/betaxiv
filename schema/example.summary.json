@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "2.0",
   "paper": {
     "sourcePath": "papers/attention-is-all-you-need.pdf",
     "title": "Attention Is All You Need",
@@ -14,7 +14,8 @@
       "Illia Polosukhin"
     ],
     "year": 2017,
-    "venue": "NeurIPS"
+    "venue": "NeurIPS",
+    "date": "June 12, 2017"
   },
   "summary": {
     "tldr": "Introduces the Transformer, a sequence transduction architecture built entirely on attention, dropping recurrence and convolutions. It trains faster via parallelism and sets new state-of-the-art BLEU scores on English-to-German and English-to-French translation.",
@@ -28,37 +29,68 @@
       {
         "heading": "1. Introduction",
         "page": 1,
-        "points": [
-          "Recurrent models process sequentially, which prevents parallelization within training examples.",
-          "Attention mechanisms allow modeling dependencies without regard to distance in the sequence.",
-          "The Transformer relies entirely on attention to draw global dependencies between input and output."
+        "blocks": [
+          {
+            "type": "paragraph",
+            "text": "Recurrent models process tokens **sequentially**, which prevents parallelization within a training example and makes long sequences expensive to train. This sequential constraint had become the main bottleneck for scaling sequence models."
+          },
+          {
+            "type": "paragraph",
+            "text": "Attention mechanisms allow modeling dependencies without regard to their distance in the sequence. The Transformer relies *entirely* on attention to draw global dependencies between input and output, dispensing with recurrence altogether."
+          }
         ]
       },
       {
         "heading": "3. Model Architecture",
         "page": 2,
-        "points": [
-          "Encoder-decoder structure with stacked self-attention and point-wise feed-forward layers.",
-          "Encoder: 6 identical layers, each with multi-head self-attention and a feed-forward sub-layer, plus residual connections and layer normalization.",
-          "Decoder: adds a third sub-layer performing multi-head attention over the encoder output, with masking to preserve auto-regression."
+        "blocks": [
+          {
+            "type": "paragraph",
+            "text": "The Transformer follows an encoder-decoder structure built from stacked self-attention and point-wise feed-forward layers. The encoder maps an input sequence to a sequence of continuous representations; the decoder then generates the output one token at a time."
+          },
+          {
+            "type": "figure",
+            "label": "Figure 1"
+          },
+          {
+            "type": "bullets",
+            "items": [
+              "Encoder: 6 identical layers, each with multi-head self-attention and a feed-forward sub-layer, plus residual connections and layer normalization.",
+              "Decoder: adds a third sub-layer performing multi-head attention over the encoder output, with masking to preserve auto-regression."
+            ]
+          }
         ]
       },
       {
         "heading": "3.2 Attention",
         "page": 3,
-        "points": [
-          "Scaled dot-product attention computes softmax(QK^T / sqrt(d_k)) V.",
-          "Multi-head attention runs h parallel attention layers on linear projections of queries, keys, and values.",
-          "The scaling factor 1/sqrt(d_k) counteracts large dot products that push softmax into low-gradient regions."
+        "blocks": [
+          {
+            "type": "paragraph",
+            "text": "Scaled dot-product attention computes a weighted sum of values, where the weight of each value comes from a compatibility of the query with the corresponding key:"
+          },
+          {
+            "type": "formula",
+            "text": "Attention(Q, K, V) = softmax(Q K^T / sqrt(d_k)) V"
+          },
+          {
+            "type": "paragraph",
+            "text": "The scaling factor `1/sqrt(d_k)` counteracts large dot products that would otherwise push the softmax into regions with vanishingly small gradients. Multi-head attention runs `h` parallel attention layers on linear projections of queries, keys, and values."
+          }
         ]
       },
       {
         "heading": "5. Training",
         "page": 7,
-        "points": [
-          "Trained on the WMT 2014 English-German (4.5M pairs) and English-French (36M pairs) datasets.",
-          "Used the Adam optimizer with a custom learning-rate warmup schedule.",
-          "Regularized with residual dropout and label smoothing."
+        "blocks": [
+          {
+            "type": "bullets",
+            "items": [
+              "Trained on the WMT 2014 English-German (4.5M pairs) and English-French (36M pairs) datasets.",
+              "Used the Adam optimizer with a custom learning-rate warmup schedule.",
+              "Regularized with residual dropout and label smoothing."
+            ]
+          }
         ]
       }
     ],
@@ -66,17 +98,20 @@
       {
         "label": "Figure 1",
         "caption": "The Transformer model architecture, showing the stacked encoder (left) and decoder (right).",
-        "page": 3
+        "page": 3,
+        "bbox": [0.18, 0.08, 0.82, 0.55]
       },
       {
         "label": "Figure 2",
         "caption": "Scaled Dot-Product Attention (left) and Multi-Head Attention consisting of several attention layers running in parallel (right).",
-        "page": 4
+        "page": 4,
+        "bbox": [0.12, 0.1, 0.88, 0.42]
       },
       {
         "label": "Table 2",
         "caption": "The Transformer achieves better BLEU scores than previous state-of-the-art models at a fraction of the training cost.",
-        "page": 8
+        "page": 8,
+        "bbox": null
       }
     ],
     "glossary": [
@@ -96,6 +131,20 @@
     "openQuestions": [
       "How well does the Transformer generalize to modalities beyond text, such as images and audio?",
       "Can attention be made more efficient for very long sequences where the quadratic cost dominates?"
+    ],
+    "relevantCitations": [
+      {
+        "title": "Neural Machine Translation by Jointly Learning to Align and Translate",
+        "authors": ["Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio"],
+        "venue": "ICLR 2015",
+        "note": "Introduced the attention mechanism for sequence-to-sequence models that the Transformer generalizes and makes the sole computational primitive."
+      },
+      {
+        "title": "Layer Normalization",
+        "authors": ["Jimmy Lei Ba", "Jamie Ryan Kiros", "Geoffrey E. Hinton"],
+        "venue": "arXiv 2016",
+        "note": "Layer normalization is applied after every sub-layer's residual connection, stabilizing the deep stack of attention and feed-forward layers."
+      }
     ]
   },
   "generatedBy": {

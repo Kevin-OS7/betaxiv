@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/betaxiv/paper-reader/schema/summary.schema.v2.json",
+  "title": "Paper Reader Summary",
+  "description": "Versioned contract between the paper-summarizer skill (writer) and the Paper Reader VS Code extension (reader). Both sides validate against this file. v2 adds blog-style prose blocks, figure bounding boxes (the model locates figures; the extension crops the real PDF image), a date line, and annotated citations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "paper", "summary", "generatedBy"],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "2.0",
+      "description": "Schema contract version. Pinned so reader and writer never silently diverge."
+    },
+    "paper": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourcePath", "title", "authors", "year", "venue", "date"],
+      "properties": {
+        "sourcePath": {
+          "type": "string",
+          "description": "Path to the source PDF, relative to the workspace root (e.g. papers/attention.pdf)."
+        },
+        "title": { "type": "string" },
+        "authors": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "year": {
+          "type": ["integer", "null"],
+          "description": "Publication year, or null if unknown."
+        },
+        "venue": {
+          "type": ["string", "null"],
+          "description": "Publication venue, or null if unknown."
+        },
+        "date": {
+          "type": ["string", "null"],
+          "description": "Human-readable date line shown under the title (e.g. 'December 11, 2015'). Required key, nullable value."
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tldr",
+        "keyContributions",
+        "sections",
+        "figures",
+        "glossary",
+        "openQuestions",
+        "relevantCitations"
+      ],
+      "properties": {
+        "tldr": {
+          "type": "string",
+          "description": "One short paragraph capturing the paper at a glance. Rendered as the Summary box."
+        },
+        "keyContributions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["heading", "page", "blocks"],
+            "properties": {
+              "heading": { "type": "string" },
+              "page": {
+                "type": ["integer", "null"],
+                "minimum": 1,
+                "description": "1-based source page anchor. Required key, nullable value. Carried now to enable jump/highlight later without a schema change."
+              },
+              "blocks": {
+                "type": "array",
+                "description": "Ordered prose blocks. Figures appear inline via a figure block that references a figures[] entry by label.",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["type", "text"],
+                      "properties": {
+                        "type": { "const": "paragraph" },
+                        "text": {
+                          "type": "string",
+                          "description": "Flowing prose. Minimal inline emphasis is supported: **bold** and `code`."
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["type", "items"],
+                      "properties": {
+                        "type": { "const": "bullets" },
+                        "items": {
+                          "type": "array",
+                          "items": { "type": "string" }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["type", "text"],
+                      "properties": {
+                        "type": { "const": "formula" },
+                        "text": {
+                          "type": "string",
+                          "description": "Equation or expression, shown verbatim in a monospace box (e.g. 'y = F(x, {W_i}) + x')."
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["type", "label"],
+                      "properties": {
+                        "type": { "const": "figure" },
+                        "label": {
+                          "type": "string",
+                          "description": "Must match a figures[].label; the extension renders that figure inline here."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "figures": {
+          "type": "array",
+          "description": "Catalog of important figures/tables. The model only LOCATES each figure (page + bbox); the extension crops the real image from the rendered PDF page. It never draws figures.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "caption", "page", "bbox"],
+            "properties": {
+              "label": { "type": "string", "description": "e.g. Figure 1, Table 2." },
+              "caption": { "type": "string" },
+              "page": {
+                "type": ["integer", "null"],
+                "minimum": 1
+              },
+              "bbox": {
+                "type": ["array", "null"],
+                "minItems": 4,
+                "maxItems": 4,
+                "items": { "type": "number", "minimum": 0, "maximum": 1 },
+                "description": "Normalized [x0, y0, x1, y1] in 0..1, origin top-left, of the figure region on its page. Null if the region is unknown (the extension then shows caption + page only)."
+              }
+            }
+          }
+        },
+        "glossary": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["term", "definition"],
+            "properties": {
+              "term": { "type": "string" },
+              "definition": { "type": "string" }
+            }
+          }
+        },
+        "openQuestions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "relevantCitations": {
+          "type": "array",
+          "description": "Annotated references the paper builds on (alphaXiv-style). May be empty.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "note"],
+            "properties": {
+              "title": { "type": "string" },
+              "authors": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "venue": { "type": ["string", "null"] },
+              "note": {
+                "type": "string",
+                "description": "Why this citation matters to the paper."
+              }
+            }
+          }
+        }
+      }
+    },
+    "generatedBy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "model", "timestamp"],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "The agent harness that produced this summary, e.g. Claude Code, Codex, Gemini CLI."
+        },
+        "model": {
+          "type": ["string", "null"],
+          "description": "Model identifier if known, else null."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of generation."
+        }
+      }
+    }
+  }
+}

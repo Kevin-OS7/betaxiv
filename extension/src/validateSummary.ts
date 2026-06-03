@@ -1,4 +1,4 @@
-// Host-side validation against the shared contract (schema/summary.schema.v1.json).
+// Host-side validation against the shared contract (schema/summary.schema.v2.json).
 // Rule 4 (AGENTS.md): the schema is the contract; reader and writer validate the SAME file.
 // The schema JSON is bundled into the extension by esbuild, so no runtime file read is needed.
 
@@ -6,7 +6,7 @@
 // `ajv` export only understands draft-07 and throws on the 2020-12 meta-schema).
 import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
 import addFormats from "ajv-formats";
-import schema from "../../schema/summary.schema.v1.json";
+import schema from "../../schema/summary.schema.v2.json";
 import type { PaperSummary } from "./protocol";
 
 let validateFn: ValidateFunction | undefined;

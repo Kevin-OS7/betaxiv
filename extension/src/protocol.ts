@@ -1,23 +1,49 @@
 // Shared message protocol between the extension host (Node) and the webview (browser).
 // Imported by both bundles so the two worlds agree on the wire format.
 
-/** Shape of a validated summary (mirrors schema/summary.schema.v1.json). */
+/** A normalized figure region on a page: [x0, y0, x1, y1] in 0..1, origin top-left. */
+export type Bbox = [number, number, number, number];
+
+/** One prose block inside a section. Figures appear inline via a `figure` block. */
+export type Block =
+  | { type: "paragraph"; text: string }
+  | { type: "bullets"; items: string[] }
+  | { type: "formula"; text: string }
+  | { type: "figure"; label: string };
+
+export interface Figure {
+  label: string;
+  caption: string;
+  page: number | null;
+  bbox: Bbox | null;
+}
+
+export interface Citation {
+  title: string;
+  authors?: string[];
+  venue?: string | null;
+  note: string;
+}
+
+/** Shape of a validated summary (mirrors schema/summary.schema.v2.json). */
 export interface PaperSummary {
-  schemaVersion: "1.0";
+  schemaVersion: "2.0";
   paper: {
     sourcePath: string;
     title: string;
     authors: string[];
     year: number | null;
     venue: string | null;
+    date: string | null;
   };
   summary: {
     tldr: string;
     keyContributions: string[];
-    sections: { heading: string; page: number | null; points: string[] }[];
-    figures: { label: string; caption: string; page: number | null }[];
+    sections: { heading: string; page: number | null; blocks: Block[] }[];
+    figures: Figure[];
     glossary: { term: string; definition: string }[];
     openQuestions: string[];
+    relevantCitations: Citation[];
   };
   generatedBy: {
     agent: string;

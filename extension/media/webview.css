@@ -257,7 +257,7 @@ dd {
 }
 
 figure.fig {
-  margin: 0 0 10px;
+  margin: 12px 0;
   padding: 8px 12px;
   border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.3));
   border-radius: 4px;
@@ -266,19 +266,123 @@ figure.fig {
 figure.fig figcaption {
   font-size: 0.92em;
   color: var(--vscode-descriptionForeground);
+  margin-top: 8px;
+}
+
+.fig-image-holder {
+  display: flex;
+  justify-content: center;
+}
+
+.fig-image {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 3px;
+  background: #fff;
+}
+
+.figure-loading {
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  padding: 14px 0;
+}
+
+.fig-missing {
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
+
+/* --- Blog-style prose blocks ------------------------------------------------ */
+.summary-date {
+  font-size: 0.9em;
+  color: var(--vscode-descriptionForeground);
+  margin: 2px 0 4px;
+}
+
+.block-para {
+  margin: 8px 0;
+  line-height: 1.55;
+}
+
+.inline-code,
+.guidance code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.formula {
+  font-family: var(--vscode-editor-font-family, monospace);
+  white-space: pre-wrap;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.3));
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin: 10px 0;
+  overflow-x: auto;
+}
+
+/* --- Table of contents ------------------------------------------------------ */
+.toc {
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.3));
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.toc-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.toc ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+}
+
+.toc li {
+  margin: 2px 0;
+}
+
+.toc a {
+  color: var(--vscode-textLink-foreground, #3794ff);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.toc a:hover {
+  text-decoration: underline;
+}
+
+/* --- Relevant citations ----------------------------------------------------- */
+.citation {
+  margin: 0 0 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.3));
+}
+
+.citation-title {
+  font-weight: 600;
+}
+
+.citation-meta {
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  margin: 1px 0;
+}
+
+.citation-note {
+  font-size: 0.92em;
 }
 
 .guidance {
   border: 1px dashed var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.5));
   border-radius: 6px;
   padding: 18px 20px;
-}
-
-.guidance code {
-  font-family: var(--vscode-editor-font-family, monospace);
-  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
-  padding: 1px 5px;
-  border-radius: 3px;
 }
 
 .errors {

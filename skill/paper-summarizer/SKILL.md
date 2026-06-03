@@ -17,7 +17,7 @@ writing. The contract between you and the extension is a single versioned JSON f
 - **Output:** `.paper-reader/summaries/<basename>.summary.json`, where `<basename>` is the
   PDF filename without its `.pdf` extension (e.g. `papers/attention.pdf` →
   `.paper-reader/summaries/attention.summary.json`). Create the directory if missing.
-- **Contract:** the output MUST validate against `schema/summary.schema.v1.json`. Read
+- **Contract:** the output MUST validate against `schema/summary.schema.v2.json`. Read
   that schema and match it exactly. `schema/example.summary.json` is a filled-in example.
 
 ## How to read the PDF
@@ -39,37 +39,71 @@ writing. The contract between you and the extension is a single versioned JSON f
 
 ## Building the summary
 
-Fill every field in the schema:
+The goal is an **alphaXiv-style blog**: a Summary box, flowing prose sections (not bare
+bullet points), figures shown inline, and annotated citations. Fill every field:
 
-- `schemaVersion`: exactly `"1.0"`.
+- `schemaVersion`: exactly `"2.0"`.
 - `paper`: `sourcePath` (path to the PDF, relative to the workspace root, e.g.
   `papers/attention.pdf`), `title`, `authors[]`, `year` (integer or `null`), `venue`
-  (string or `null`).
+  (string or `null`), `date` (the human-readable date line under the title, e.g.
+  `"December 11, 2015"`, or `null`).
 - `summary`:
-  - `tldr` — one tight paragraph: what the paper does and why it matters.
+  - `tldr` — one tight paragraph: what the paper does and why it matters (the Summary box).
   - `keyContributions[]` — the concrete contributions, one per item.
-  - `sections[]` — `{ heading, page, points[] }` for the meaningful sections. `page` is
-    the 1-based source page where the section starts; use `null` only if genuinely unknown.
-  - `figures[]` — `{ label, caption, page }` for important figures/tables.
+  - `sections[]` — `{ heading, page, blocks[] }` for the meaningful sections. `page` is the
+    1-based source page where the section starts; use `null` only if genuinely unknown.
+    `blocks[]` is **ordered prose**, each block one of:
+    - `{ "type": "paragraph", "text": "…" }` — flowing prose. Inline emphasis: `**bold**`
+      and `` `code` `` are supported; nothing else (no headings/links/images in text).
+    - `{ "type": "bullets", "items": ["…", "…"] }` — a short list where it genuinely helps.
+    - `{ "type": "formula", "text": "y = F(x, {W_i}) + x" }` — shown verbatim in a mono box.
+    - `{ "type": "figure", "label": "Figure 2" }` — places a figure inline **here**; `label`
+      must match an entry in `figures[]`. This is how figures appear in the reading flow.
+    Write real prose. Prefer paragraphs; reach for bullets only for genuinely enumerable
+    points. Drop a `figure` block where the figure is first discussed.
+  - `figures[]` — `{ label, caption, page, bbox }` for important figures/tables. **You do
+    not draw figures.** You only LOCATE each one; the extension crops the real image out of
+    the rendered PDF page. See "Locating figures" below for `bbox`.
   - `glossary[]` — `{ term, definition }` for non-obvious terms a reader would want.
   - `openQuestions[]` — limitations or questions the paper leaves open.
+  - `relevantCitations[]` — `{ title, authors?, venue?, note }` for key references the paper
+    builds on (like alphaXiv's "Relevant Citations"). `note` says why it matters. May be `[]`.
 - `generatedBy`: `agent` (your harness, e.g. `"Claude Code"`), `model` (model id or
   `null`), `timestamp` — **must be an ISO 8601 date-time** (e.g. `2026-06-03T12:00:00Z`);
   the extension validates this format and rejects free-form dates.
 
-`page` values are **required keys** even though the value may be `null`. They let the
-extension add page jumps later without a schema change — fill them whenever you can.
+`page` (and `paper.date`/`year`/`venue`) values are **required keys** even though the value
+may be `null`. Fill them whenever you can.
+
+## Locating figures (bbox)
+
+You never render figures — you tell the extension **where** each figure sits and it crops
+the real pixels from the PDF page. For each `figures[]` entry give:
+
+- `page` — the 1-based page the figure appears on.
+- `bbox` — `[x0, y0, x1, y1]`, **normalized 0..1**, origin **top-left** of the page:
+  `x` increases rightward, `y` increases downward. So `[0.1, 0.08, 0.9, 0.45]` is a wide
+  box across the top portion of the page. Read the PDF natively to estimate the box; include
+  the whole figure body (and its in-figure labels) but you may exclude the caption text.
+  Err slightly **generous** rather than tight. Set `bbox` to `null` if you can't tell — the
+  extension then shows just the caption and page.
+
+Reference each figure once from a section via a `{ "type": "figure", "label": … }` block so
+it renders in context. (Any figure you list but never reference still appears in a trailing
+"Figures & Tables" list, so nothing is lost.)
 
 ## Validate before writing
 
 The summary file is a contract; a malformed file shows an error in the extension. Before
-writing, **self-check against the schema**: confirm `schemaVersion` is `"1.0"`, every
+writing, **self-check against the schema**: confirm `schemaVersion` is `"2.0"`, every
 required key is present at each level, arrays are arrays, `page`/`year` are integers or
-`null`, and `generatedBy.timestamp` is a real ISO 8601 date-time.
+`null`, each section has `blocks[]` whose items have a valid `type`, each figure has a
+`bbox` (4 numbers in 0..1, or `null`), and `generatedBy.timestamp` is a real ISO 8601
+date-time.
 
-The full schema is `summary.schema.v1.json`, shipped **in this skill's own directory**
+The full schema is `summary.schema.v2.json`, shipped **in this skill's own directory**
 (installed at `<workspace>/.agents/skills/paper-summarizer/`, mirrored under `.claude/` and
-`.gemini/`; in the Paper Reader repo it's at `schema/summary.schema.v1.json`). The
+`.gemini/`; in the Paper Reader repo it's at `schema/summary.schema.v2.json`). The
 extension performs the **authoritative** JSON Schema validation when it loads the file.
 
 For a quick pre-write check you can run this **dependency-free** Node snippet (no `ajv`,
@@ -80,15 +114,23 @@ SUMMARY=.paper-reader/summaries/<basename>.summary.json node -e '
 const fs=require("fs"); const e=[];
 let d; try { d=JSON.parse(fs.readFileSync(process.env.SUMMARY,"utf8")); }
 catch(x){ console.log("INVALID: not JSON - "+x.message); process.exit(1); }
-if(d.schemaVersion!=="1.0") e.push("schemaVersion must be \"1.0\"");
+if(d.schemaVersion!=="2.0") e.push("schemaVersion must be \"2.0\"");
 for(const k of ["paper","summary","generatedBy"]) if(!d[k]) e.push("missing "+k);
 const s=d.summary||{};
-for(const k of ["tldr","keyContributions","sections","figures","glossary","openQuestions"])
+for(const k of ["tldr","keyContributions","sections","figures","glossary","openQuestions","relevantCitations"])
   if(!(k in s)) e.push("summary."+k+" missing");
-for(const k of ["keyContributions","sections","figures","glossary","openQuestions"])
+for(const k of ["keyContributions","sections","figures","glossary","openQuestions","relevantCitations"])
   if(s[k]&&!Array.isArray(s[k])) e.push("summary."+k+" must be an array");
+const BT=new Set(["paragraph","bullets","formula","figure"]);
+const labels=new Set((s.figures||[]).map(f=>f&&f.label));
 (s.sections||[]).forEach((x,i)=>{ if(!("page" in x)) e.push("sections["+i+"].page key required");
-  if(x.page!==null&&!Number.isInteger(x.page)) e.push("sections["+i+"].page must be int|null"); });
+  if(x.page!==null&&!Number.isInteger(x.page)) e.push("sections["+i+"].page must be int|null");
+  if(!Array.isArray(x.blocks)) e.push("sections["+i+"].blocks must be an array");
+  (x.blocks||[]).forEach((b,j)=>{ if(!b||!BT.has(b.type)) e.push("sections["+i+"].blocks["+j+"].type invalid");
+    if(b&&b.type==="figure"&&!labels.has(b.label)) e.push("sections["+i+"].blocks["+j+"] figure label not in figures[]"); }); });
+(s.figures||[]).forEach((f,i)=>{ if(!("bbox" in f)) e.push("figures["+i+"].bbox key required");
+  if(f.bbox!==null&&!(Array.isArray(f.bbox)&&f.bbox.length===4&&f.bbox.every(n=>typeof n==="number"&&n>=0&&n<=1)))
+    e.push("figures["+i+"].bbox must be 4 numbers in 0..1, or null"); });
 const ts=(d.generatedBy||{}).timestamp||"";
 const m=/^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(ts);
 const cal=m&&new Date(Date.UTC(+m[1],+m[2]-1,+m[3])); // verify the calendar date is real (no 02-31 rollover)

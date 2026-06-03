@@ -10,7 +10,7 @@ agent. See [REQUIREMENTS.md](REQUIREMENTS.md) and [AGENTS.md](AGENTS.md).
 ## Layout
 
 ```
-schema/            The contract: summary.schema.v1.json + a golden example
+schema/            The contract: summary.schema.v2.json + a golden example
 skill/             paper-summarizer/SKILL.md — your agent runs this to write summaries
 extension/         The VS Code extension (TypeScript, esbuild, PDF.js)
 papers/            Drop your PDFs here (git-ignored)
@@ -24,7 +24,7 @@ papers/foo.pdf ──► your agent runs the paper-summarizer skill
                           │  (reads the PDF, writes JSON)
                           ▼
    .paper-reader/summaries/foo.summary.json   ◄── the versioned contract
-                          │  (validated by schema/summary.schema.v1.json)
+                          │  (validated by schema/summary.schema.v2.json)
                           ▼
    Paper Reader extension renders: PDF left, summary right (live-reloads on change)
 ```

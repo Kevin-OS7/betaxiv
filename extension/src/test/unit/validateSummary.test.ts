@@ -1,5 +1,5 @@
 // Contract unit tests — run in plain Node (no VS Code), so they're fast and CI-friendly.
-// They guard rule 4 (AGENTS.md): the summary JSON must match schema/summary.schema.v1.json.
+// They guard rule 4 (AGENTS.md): the summary JSON must match schema/summary.schema.v2.json.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -17,7 +17,7 @@ test("golden example.summary.json validates", () => {
 
 test("wrong schemaVersion is rejected", () => {
   const bad = clone(example);
-  (bad as { schemaVersion: string }).schemaVersion = "2.0";
+  (bad as { schemaVersion: string }).schemaVersion = "1.0";
   const res = validateSummaryBytes(encode(bad));
   assert.equal(res.valid, false);
   assert.ok(res.errors.length > 0);
@@ -56,6 +56,27 @@ test("valid ISO date-time timestamp is accepted", () => {
   ok.generatedBy.timestamp = "2026-06-03T12:34:56Z";
   const res = validateSummaryBytes(encode(ok));
   assert.equal(res.valid, true, res.errors.join("; "));
+});
+
+test("null figure bbox is allowed (required key, nullable value)", () => {
+  const ok = clone(example);
+  (ok.summary.figures[0] as { bbox: number[] | null }).bbox = null;
+  const res = validateSummaryBytes(encode(ok));
+  assert.equal(res.valid, true, res.errors.join("; "));
+});
+
+test("malformed figure bbox (wrong length) is rejected", () => {
+  const bad = clone(example);
+  (bad.summary.figures[0] as { bbox: number[] | null }).bbox = [0.1, 0.2, 0.3];
+  const res = validateSummaryBytes(encode(bad));
+  assert.equal(res.valid, false);
+});
+
+test("unknown section block type is rejected", () => {
+  const bad = clone(example);
+  (bad.summary.sections[0].blocks as { type: string }[]).push({ type: "table" });
+  const res = validateSummaryBytes(encode(bad));
+  assert.equal(res.valid, false);
 });
 
 test("non-JSON bytes produce a clear error, not a throw", () => {
