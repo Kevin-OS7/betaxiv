@@ -55,7 +55,10 @@ bullet points), figures shown inline, and annotated citations. Fill every field:
     `blocks[]` is **ordered prose**, each block one of:
     - `{ "type": "paragraph", "text": "…" }` — flowing prose. Inline emphasis: `**bold**`
       and `` `code` `` are supported; nothing else (no headings/links/images in text).
-    - `{ "type": "bullets", "items": ["…", "…"] }` — a short list where it genuinely helps.
+    - `{ "type": "bullets", "items": ["…", "…"] }` — a list where it genuinely helps. Set
+      `"ordered": true` for a **numbered** list. An item is a string, **or**
+      `{ "text": "…", "items": [...], "ordered"?: bool }` to nest a **sub-list** (outline /
+      tab-like indentation); sub-lists can be ordered independently.
     - `{ "type": "formula", "text": "y = F(x, {W_i}) + x" }` — shown verbatim in a mono box.
     - `{ "type": "figure", "label": "Figure 2" }` — places a figure inline **here**; `label`
       must match an entry in `figures[]`. This is how figures appear in the reading flow.

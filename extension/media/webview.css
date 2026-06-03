@@ -125,7 +125,8 @@ body {
   display: block;
 }
 
-#zoom-toolbar {
+#zoom-toolbar,
+#summary-zoom-toolbar {
   position: fixed;
   bottom: 16px;
   left: 16px;
@@ -142,11 +143,13 @@ body {
   transition: opacity 0.15s;
 }
 
-#zoom-toolbar:hover {
+#zoom-toolbar:hover,
+#summary-zoom-toolbar:hover {
   opacity: 1;
 }
 
-#zoom-toolbar button {
+#zoom-toolbar button,
+#summary-zoom-toolbar button {
   cursor: pointer;
   border: none;
   border-radius: 4px;
@@ -158,11 +161,13 @@ body {
   color: var(--vscode-button-secondaryForeground, #fff);
 }
 
-#zoom-toolbar button:hover {
+#zoom-toolbar button:hover,
+#summary-zoom-toolbar button:hover {
   background: var(--vscode-button-secondaryHoverBackground, #45494e);
 }
 
-#zoom-level {
+#zoom-level,
+#summary-zoom-level {
   min-width: 44px;
   text-align: center;
   font-size: 12px;
@@ -170,9 +175,23 @@ body {
   user-select: none;
 }
 
+/* Summary zoom toolbar lives bottom-right, only while the summary pane is open. */
+#summary-zoom-toolbar {
+  left: auto;
+  right: 16px;
+  display: none;
+}
+
+#app.summary-open #summary-zoom-toolbar {
+  display: flex;
+}
+
 #summary-pane {
   padding: 20px 24px;
   line-height: 1.5;
+  /* Summary-only text zoom: everything inside sizes in em, so scaling the pane's base
+     font-size enlarges the whole summary. Driven by --summary-zoom from the webview. */
+  font-size: calc(var(--vscode-font-size, 13px) * var(--summary-zoom, 1));
 }
 
 .status {
@@ -214,12 +233,13 @@ body {
 }
 
 .section-block {
-  margin-bottom: 14px;
+  margin-bottom: 24px;
 }
 
 .section-block h3 {
-  font-size: 1em;
-  margin: 0 0 4px;
+  font-size: 1.25em;
+  font-weight: 600;
+  margin: 26px 0 8px;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -234,13 +254,22 @@ body {
   padding: 1px 7px;
 }
 
-ul {
-  margin: 4px 0;
-  padding-left: 20px;
+ul,
+ol {
+  margin: 8px 0;
+  padding-left: 26px;
 }
 
 li {
-  margin: 3px 0;
+  margin: 4px 0;
+  line-height: 1.5;
+}
+
+/* Nested lists indent further (tab-like) and tuck closer to their parent item. */
+li > ul,
+li > ol {
+  margin: 4px 0 6px;
+  padding-left: 24px;
 }
 
 dl {

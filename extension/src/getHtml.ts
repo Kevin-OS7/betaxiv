@@ -48,11 +48,17 @@ export function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): stri
       <div id="pdf-status" class="status">Loading PDF…</div>
       <div id="pdf-pages"></div>
     </section>
-    <div id="zoom-toolbar" aria-label="Zoom controls" hidden>
+    <div id="zoom-toolbar" aria-label="PDF zoom controls" hidden>
       <button id="zoom-out" title="Zoom out (Ctrl/Cmd -)" aria-label="Zoom out">−</button>
       <span id="zoom-level" aria-live="polite">100%</span>
       <button id="zoom-in" title="Zoom in (Ctrl/Cmd +)" aria-label="Zoom in">+</button>
       <button id="zoom-reset" title="Fit to width (Ctrl/Cmd 0)" aria-label="Fit to width">Fit</button>
+    </div>
+    <div id="summary-zoom-toolbar" aria-label="Summary zoom controls">
+      <button id="summary-zoom-out" title="Summary text smaller (Ctrl/Cmd + scroll)" aria-label="Summary zoom out">−</button>
+      <span id="summary-zoom-level" aria-live="polite">100%</span>
+      <button id="summary-zoom-in" title="Summary text larger (Ctrl/Cmd + scroll)" aria-label="Summary zoom in">+</button>
+      <button id="summary-zoom-reset" title="Reset summary text size" aria-label="Reset summary text size">Reset</button>
     </div>
     <div id="view-controls">
       <span id="summary-status" hidden></span>

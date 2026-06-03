@@ -2,7 +2,7 @@
 // left via vendored PDF.js, and the validated summary on the right. No network, no
 // browser storage — state goes through the VS Code webview state API (rules 1 & 5).
 
-import type { HostMessage, PaperSummary, Block, Figure } from "../protocol";
+import type { HostMessage, PaperSummary, Block, Figure, ListItem } from "../protocol";
 
 interface VsCodeApi {
   postMessage(msg: unknown): void;
@@ -31,6 +31,7 @@ interface SavedState {
   zoom?: number;
   summaryOpen?: boolean;
   splitCols?: string;
+  summaryZoom?: number;
 }
 function saveState(patch: Partial<SavedState>): void {
   const cur = (vscode.getState() as SavedState) ?? {};
@@ -85,6 +86,44 @@ function setSummaryOpen(open: boolean): void {
 }
 setSummaryOpen(summaryOpen);
 summaryToggle.addEventListener("click", () => setSummaryOpen(!summaryOpen));
+
+// --- Summary text zoom (independent of the PDF zoom) ------------------------
+// Scales only the summary pane's base font-size via the --summary-zoom CSS var; the
+// summary content is all em-sized, so it enlarges together. Driven by buttons and
+// Ctrl/Cmd+scroll over the pane (keyboard +/-/0 stays bound to the PDF pane).
+const summaryPane = document.getElementById("summary-pane") as HTMLElement;
+const SUMMARY_MIN_ZOOM = 0.6;
+const SUMMARY_MAX_ZOOM = 2.5;
+const summaryZoomLevel = document.getElementById("summary-zoom-level");
+let summaryZoom =
+  typeof viewState.summaryZoom === "number"
+    ? Math.max(SUMMARY_MIN_ZOOM, Math.min(SUMMARY_MAX_ZOOM, viewState.summaryZoom))
+    : 1;
+function applySummaryZoom(target: number): void {
+  summaryZoom = Math.max(SUMMARY_MIN_ZOOM, Math.min(SUMMARY_MAX_ZOOM, target));
+  app.style.setProperty("--summary-zoom", String(summaryZoom));
+  if (summaryZoomLevel) summaryZoomLevel.textContent = `${Math.round(summaryZoom * 100)}%`;
+  saveState({ summaryZoom });
+}
+applySummaryZoom(summaryZoom);
+document
+  .getElementById("summary-zoom-in")
+  ?.addEventListener("click", () => applySummaryZoom(summaryZoom * 1.1));
+document
+  .getElementById("summary-zoom-out")
+  ?.addEventListener("click", () => applySummaryZoom(summaryZoom / 1.1));
+document
+  .getElementById("summary-zoom-reset")
+  ?.addEventListener("click", () => applySummaryZoom(1));
+summaryPane.addEventListener(
+  "wheel",
+  (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    applySummaryZoom(summaryZoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+  },
+  { passive: false }
+);
 
 // Top-right notice so the user knows a summary is missing/invalid even while collapsed.
 type SummaryStatus = "ready" | "missing" | "invalid";
@@ -562,6 +601,26 @@ function renderFigure(fig: Figure): HTMLElement {
   return figure;
 }
 
+// Recursive list renderer: ordered (<ol>) or unordered (<ul>), with nested sub-lists for
+// outline-style / tab-like indentation. Each item is a plain string or an object that
+// carries its own (independently ordered) sub-items.
+function renderList(items: ListItem[], ordered: boolean): HTMLElement {
+  const list = document.createElement(ordered ? "ol" : "ul");
+  for (const item of items) {
+    const li = document.createElement("li");
+    if (typeof item === "string") {
+      inline(item, li);
+    } else {
+      inline(item.text, li);
+      if (item.items && item.items.length) {
+        li.appendChild(renderList(item.items, item.ordered ?? false));
+      }
+    }
+    list.appendChild(li);
+  }
+  return list;
+}
+
 function renderBlocks(
   blocks: Block[],
   figuresByLabel: Map<string, Figure>,
@@ -573,13 +632,7 @@ function renderBlocks(
       inline(b.text, p);
       parent.appendChild(p);
     } else if (b.type === "bullets") {
-      const ul = document.createElement("ul");
-      for (const item of b.items) {
-        const li = document.createElement("li");
-        inline(item, li);
-        ul.appendChild(li);
-      }
-      parent.appendChild(ul);
+      parent.appendChild(renderList(b.items, b.ordered ?? false));
     } else if (b.type === "formula") {
       parent.appendChild(el("div", "formula", b.text));
     } else if (b.type === "figure") {

@@ -6,6 +6,27 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "paper", "summary", "generatedBy"],
+  "$defs": {
+    "listItem": {
+      "description": "A list item: a plain string, or an object with nested sub-items (for tab-like indentation / outlines). Sub-lists may be ordered or unordered independently.",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text"],
+          "properties": {
+            "text": { "type": "string" },
+            "ordered": { "type": "boolean" },
+            "items": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/listItem" }
+            }
+          }
+        }
+      ]
+    }
+  },
   "properties": {
     "schemaVersion": {
       "type": "string",
@@ -97,9 +118,13 @@
                       "required": ["type", "items"],
                       "properties": {
                         "type": { "const": "bullets" },
+                        "ordered": {
+                          "type": "boolean",
+                          "description": "true → numbered (ordered) list; omitted/false → bulleted list."
+                        },
                         "items": {
                           "type": "array",
-                          "items": { "type": "string" }
+                          "items": { "$ref": "#/$defs/listItem" }
                         }
                       }
                     },

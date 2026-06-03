@@ -85,10 +85,23 @@
         "blocks": [
           {
             "type": "bullets",
+            "ordered": true,
             "items": [
-              "Trained on the WMT 2014 English-German (4.5M pairs) and English-French (36M pairs) datasets.",
-              "Used the Adam optimizer with a custom learning-rate warmup schedule.",
-              "Regularized with residual dropout and label smoothing."
+              "Trained on WMT 2014 English-German (4.5M pairs) and English-French (36M pairs).",
+              {
+                "text": "Optimized with Adam and a custom learning-rate schedule:",
+                "items": [
+                  "Linear warmup for the first 4000 steps.",
+                  "Inverse-square-root decay thereafter."
+                ]
+              },
+              {
+                "text": "Regularized in two ways:",
+                "items": [
+                  "Residual dropout on sub-layer outputs and embedding sums.",
+                  "Label smoothing of 0.1."
+                ]
+              }
             ]
           }
         ]

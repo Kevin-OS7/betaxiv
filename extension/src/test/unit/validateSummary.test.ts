@@ -79,6 +79,17 @@ test("unknown section block type is rejected", () => {
   assert.equal(res.valid, false);
 });
 
+test("nested list item without required text is rejected", () => {
+  const bad = clone(example);
+  // Find the ordered list block and corrupt a nested item (object missing `text`).
+  const block = bad.summary.sections
+    .flatMap((s) => s.blocks)
+    .find((b) => (b as { type: string }).type === "bullets") as { items: unknown[] };
+  block.items.push({ items: ["orphan sub-item"] });
+  const res = validateSummaryBytes(encode(bad));
+  assert.equal(res.valid, false);
+});
+
 test("non-JSON bytes produce a clear error, not a throw", () => {
   const res = validateSummaryBytes(new TextEncoder().encode("not json {"));
   assert.equal(res.valid, false);

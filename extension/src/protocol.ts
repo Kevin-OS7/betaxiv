@@ -4,10 +4,13 @@
 /** A normalized figure region on a page: [x0, y0, x1, y1] in 0..1, origin top-left. */
 export type Bbox = [number, number, number, number];
 
+/** A list item: a plain string, or an object with its own (optionally ordered) sub-list. */
+export type ListItem = string | { text: string; ordered?: boolean; items?: ListItem[] };
+
 /** One prose block inside a section. Figures appear inline via a `figure` block. */
 export type Block =
   | { type: "paragraph"; text: string }
-  | { type: "bullets"; items: string[] }
+  | { type: "bullets"; items: ListItem[]; ordered?: boolean }
   | { type: "formula"; text: string }
   | { type: "figure"; label: string };
 
