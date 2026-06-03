@@ -19,6 +19,7 @@ const summaryRoot = document.getElementById("summary-root") as HTMLElement;
 
 interface SavedState {
   pdfScrollTop?: number;
+  zoom?: number;
 }
 function saveState(patch: Partial<SavedState>): void {
   const cur = (vscode.getState() as SavedState) ?? {};
@@ -85,7 +86,17 @@ async function renderPdf(
 
     const containerWidth = pdfPages.clientWidth || 600;
     const dpr = window.devicePixelRatio || 1;
-    const scaleFor = (baseWidth: number) => Math.min(2, (containerWidth - 16) / baseWidth);
+
+    // User zoom, relative to the fit-to-width baseline (zoom 1 == 100% == fits the pane).
+    const MIN_ZOOM = 0.5;
+    const MAX_ZOOM = 3;
+    const savedState = (vscode.getState() as SavedState) ?? {};
+    let zoom =
+      typeof savedState.zoom === "number"
+        ? Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, savedState.zoom))
+        : 1;
+    const scaleFor = (baseWidth: number) =>
+      Math.min(2, (containerWidth - 16) / baseWidth) * zoom;
 
     // Lazy rendering: build placeholder slots up front (so scroll geometry is stable),
     // then rasterize a page to canvas only when it nears the viewport, and release its
@@ -107,6 +118,12 @@ async function renderPdf(
 
     const firstPage = await doc.getPage(1);
     const base1 = firstPage.getViewport({ scale: 1 });
+    // Placeholder size estimate for not-yet-measured pages, at the current zoom (papers
+    // have a uniform page size). Recomputed when zoom changes.
+    const estDims = () => {
+      const vp = firstPage.getViewport({ scale: scaleFor(base1.width) });
+      return { w: Math.floor(vp.width), h: Math.floor(vp.height) };
+    };
     const vp1 = firstPage.getViewport({ scale: scaleFor(base1.width) });
     const estWidth = `${Math.floor(vp1.width)}px`;
     const estHeight = `${Math.floor(vp1.height)}px`;
@@ -199,10 +216,93 @@ async function renderPdf(
     for (const slot of slots) observer.observe(slot.el);
 
     // Restore saved scroll position now that slots give the document its full height.
-    const state = (vscode.getState() as SavedState) ?? {};
-    if (typeof state.pdfScrollTop === "number") {
-      pdfPane.scrollTop = state.pdfScrollTop;
+    if (typeof savedState.pdfScrollTop === "number") {
+      pdfPane.scrollTop = savedState.pdfScrollTop;
     }
+
+    // --- Zoom -----------------------------------------------------------------
+    // The IntersectionObserver only fires on intersection changes, not on resize, so a
+    // zoom change must explicitly re-render whatever is currently in view.
+    const renderVisible = () => {
+      const top = pdfPane.scrollTop - 400;
+      const bottom = pdfPane.scrollTop + pdfPane.clientHeight + 400;
+      for (const slot of slots) {
+        const slotTop = slot.el.offsetTop;
+        const slotBottom = slotTop + slot.el.offsetHeight;
+        if (slotBottom >= top && slotTop <= bottom) void renderSlot(slot);
+      }
+    };
+
+    const zoomLevel = document.getElementById("zoom-level");
+    const updateZoomLabel = () => {
+      if (zoomLevel) zoomLevel.textContent = `${Math.round(zoom * 100)}%`;
+    };
+
+    const applyZoom = (target: number) => {
+      const prev = zoom;
+      const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, target));
+      if (Math.abs(next - prev) < 0.001) return;
+      const oldScrollTop = pdfPane.scrollTop;
+      zoom = next;
+
+      // Re-scale every slot: drop stale canvases, recompute viewports (loaded pages) or
+      // reset to the new placeholder estimate (not-yet-loaded pages).
+      const est = estDims();
+      for (const slot of slots) {
+        slot.canvas?.remove();
+        slot.canvas = undefined;
+        slot.el.replaceChildren();
+        if (slot.page) {
+          const base = slot.page.getViewport({ scale: 1 });
+          slot.viewport = slot.page.getViewport({ scale: scaleFor(base.width) });
+        } else {
+          slot.viewport = undefined;
+        }
+        const w = slot.viewport ? Math.floor(slot.viewport.width) : est.w;
+        const h = slot.viewport ? Math.floor(slot.viewport.height) : est.h;
+        slot.el.style.width = `${w}px`;
+        slot.el.style.height = `${h}px`;
+      }
+      rendered.length = 0;
+
+      // Heights scale linearly with zoom, so scaling scrollTop keeps the same content
+      // anchored near the top of the viewport.
+      pdfPane.scrollTop = oldScrollTop * (next / prev);
+      updateZoomLabel();
+      renderVisible();
+      saveState({ zoom: next });
+    };
+
+    document.getElementById("zoom-in")?.addEventListener("click", () => applyZoom(zoom * 1.2));
+    document.getElementById("zoom-out")?.addEventListener("click", () => applyZoom(zoom / 1.2));
+    document.getElementById("zoom-reset")?.addEventListener("click", () => applyZoom(1));
+
+    window.addEventListener("keydown", (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        applyZoom(zoom * 1.2);
+      } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        applyZoom(zoom / 1.2);
+      } else if (e.key === "0") {
+        e.preventDefault();
+        applyZoom(1);
+      }
+    });
+
+    pdfPane.addEventListener(
+      "wheel",
+      (e) => {
+        if (!(e.ctrlKey || e.metaKey)) return;
+        e.preventDefault();
+        applyZoom(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+      },
+      { passive: false }
+    );
+
+    updateZoomLabel();
+    document.getElementById("zoom-toolbar")?.removeAttribute("hidden");
   } catch (err) {
     pdfStatus.style.display = "";
     pdfStatus.textContent = `Failed to render PDF: ${(err as Error).message}`;
