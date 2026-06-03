@@ -20,6 +20,8 @@ const summaryRoot = document.getElementById("summary-root") as HTMLElement;
 interface SavedState {
   pdfScrollTop?: number;
   zoom?: number;
+  summaryOpen?: boolean;
+  splitCols?: string;
 }
 function saveState(patch: Partial<SavedState>): void {
   const cur = (vscode.getState() as SavedState) ?? {};
@@ -34,12 +36,15 @@ window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
       break;
     case "summary":
       renderSummary(msg.summary);
+      setSummaryStatus("ready");
       break;
     case "summary-missing":
       renderGuidance(msg.summaryRelPath, msg.skillName);
+      setSummaryStatus("missing");
       break;
     case "summary-invalid":
       renderInvalid(msg.summaryRelPath, msg.errors);
+      setSummaryStatus("invalid");
       break;
   }
 });
@@ -50,6 +55,63 @@ let scrollSaveTimer: ReturnType<typeof setTimeout> | undefined;
 pdfPane.addEventListener("scroll", () => {
   if (scrollSaveTimer) clearTimeout(scrollSaveTimer);
   scrollSaveTimer = setTimeout(() => saveState({ pdfScrollTop: pdfPane.scrollTop }), 150);
+});
+
+// --- Summary pane: collapsible + resizable splitter -------------------------
+const app = document.getElementById("app") as HTMLElement;
+const splitter = document.getElementById("splitter") as HTMLElement;
+const summaryToggle = document.getElementById("summary-toggle") as HTMLButtonElement;
+const summaryStatus = document.getElementById("summary-status") as HTMLElement;
+
+const viewState = (vscode.getState() as SavedState) ?? {};
+if (viewState.splitCols) app.style.setProperty("--split-cols", viewState.splitCols);
+
+// Summary is collapsed by default; the user opens it with the toggle (choice persists).
+let summaryOpen = viewState.summaryOpen ?? false;
+function setSummaryOpen(open: boolean): void {
+  summaryOpen = open;
+  app.classList.toggle("summary-open", open);
+  summaryToggle.setAttribute("aria-pressed", String(open));
+  saveState({ summaryOpen: open });
+}
+setSummaryOpen(summaryOpen);
+summaryToggle.addEventListener("click", () => setSummaryOpen(!summaryOpen));
+
+// Top-right notice so the user knows a summary is missing/invalid even while collapsed.
+type SummaryStatus = "ready" | "missing" | "invalid";
+function setSummaryStatus(status: SummaryStatus): void {
+  if (status === "missing") {
+    summaryStatus.textContent = "Not yet summarized";
+    summaryStatus.hidden = false;
+  } else if (status === "invalid") {
+    summaryStatus.textContent = "Summary invalid";
+    summaryStatus.hidden = false;
+  } else {
+    summaryStatus.hidden = true;
+  }
+}
+
+// Drag the splitter to re-balance the two panes; the ratio is persisted.
+let dragging = false;
+splitter.addEventListener("mousedown", (e) => {
+  if (!summaryOpen) return;
+  dragging = true;
+  e.preventDefault();
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+});
+window.addEventListener("mousemove", (e) => {
+  if (!dragging) return;
+  const total = app.clientWidth || 1;
+  const leftFr = Math.max(0.2, Math.min(0.85, e.clientX / total));
+  app.style.setProperty("--split-cols", `${leftFr}fr 6px ${1 - leftFr}fr`);
+});
+window.addEventListener("mouseup", () => {
+  if (!dragging) return;
+  dragging = false;
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+  saveState({ splitCols: app.style.getPropertyValue("--split-cols") });
 });
 
 // --- PDF rendering ----------------------------------------------------------
@@ -84,7 +146,9 @@ async function renderPdf(
     pdfStatus.style.display = "none";
     pdfPages.replaceChildren();
 
-    const containerWidth = pdfPages.clientWidth || 600;
+    // Mutable: the fit-to-width baseline must track the pane width, which changes when the
+    // summary pane is toggled/resized or the window is resized (see the ResizeObserver below).
+    let containerWidth = pdfPages.clientWidth || 600;
     const dpr = window.devicePixelRatio || 1;
 
     // User zoom, relative to the fit-to-width baseline (zoom 1 == 100% == fits the pane).
@@ -238,15 +302,10 @@ async function renderPdf(
       if (zoomLevel) zoomLevel.textContent = `${Math.round(zoom * 100)}%`;
     };
 
-    const applyZoom = (target: number) => {
-      const prev = zoom;
-      const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, target));
-      if (Math.abs(next - prev) < 0.001) return;
-      const oldScrollTop = pdfPane.scrollTop;
-      zoom = next;
-
-      // Re-scale every slot: drop stale canvases, recompute viewports (loaded pages) or
-      // reset to the new placeholder estimate (not-yet-loaded pages).
+    // Re-scale every slot to the current zoom/containerWidth: drop stale canvases,
+    // recompute viewports (loaded pages) or reset to the new placeholder estimate
+    // (not-yet-loaded pages).
+    const rescaleAll = () => {
       const est = estDims();
       for (const slot of slots) {
         slot.canvas?.remove();
@@ -264,7 +323,15 @@ async function renderPdf(
         slot.el.style.height = `${h}px`;
       }
       rendered.length = 0;
+    };
 
+    const applyZoom = (target: number) => {
+      const prev = zoom;
+      const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, target));
+      if (Math.abs(next - prev) < 0.001) return;
+      const oldScrollTop = pdfPane.scrollTop;
+      zoom = next;
+      rescaleAll();
       // Heights scale linearly with zoom, so scaling scrollTop keeps the same content
       // anchored near the top of the viewport.
       pdfPane.scrollTop = oldScrollTop * (next / prev);
@@ -272,6 +339,25 @@ async function renderPdf(
       renderVisible();
       saveState({ zoom: next });
     };
+
+    // Re-fit to the pane width when it changes (summary toggle/resize, window resize),
+    // preserving the scroll position proportionally. Debounced so a splitter drag doesn't
+    // trigger a re-render storm.
+    const relayout = () => {
+      const w = pdfPages.clientWidth;
+      if (!w || w === containerWidth) return;
+      const frac = pdfPane.scrollTop / (pdfPages.scrollHeight || 1);
+      containerWidth = w;
+      rescaleAll();
+      pdfPane.scrollTop = frac * pdfPages.scrollHeight;
+      renderVisible();
+    };
+    let relayoutTimer: ReturnType<typeof setTimeout> | undefined;
+    const ro = new ResizeObserver(() => {
+      if (relayoutTimer) clearTimeout(relayoutTimer);
+      relayoutTimer = setTimeout(relayout, 120);
+    });
+    ro.observe(pdfPane);
 
     document.getElementById("zoom-in")?.addEventListener("click", () => applyZoom(zoom * 1.2));
     document.getElementById("zoom-out")?.addEventListener("click", () => applyZoom(zoom / 1.2));

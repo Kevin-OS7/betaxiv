@@ -54,7 +54,11 @@ export function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): stri
       <button id="zoom-in" title="Zoom in (Ctrl/Cmd +)" aria-label="Zoom in">+</button>
       <button id="zoom-reset" title="Fit to width (Ctrl/Cmd 0)" aria-label="Fit to width">Fit</button>
     </div>
-    <div id="splitter" role="separator" aria-orientation="vertical"></div>
+    <div id="view-controls">
+      <span id="summary-status" hidden></span>
+      <button id="summary-toggle" aria-pressed="false" title="Show/hide summary">Summary</button>
+    </div>
+    <div id="splitter" role="separator" aria-orientation="vertical" tabindex="0"></div>
     <section id="summary-pane" aria-label="Summary">
       <div id="summary-root" class="status">Waiting for summary…</div>
     </section>
