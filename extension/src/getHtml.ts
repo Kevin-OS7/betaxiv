@@ -21,6 +21,9 @@ export function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): stri
   const scriptUri = webview.asWebviewUri(
     vscode.Uri.joinPath(extensionUri, "media", "webview.js")
   );
+  const katexCssUri = webview.asWebviewUri(
+    vscode.Uri.joinPath(extensionUri, "media", "vendor", "katex", "katex.min.css")
+  );
   const cspSource = webview.cspSource;
 
   const csp = [
@@ -28,6 +31,9 @@ export function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): stri
     `img-src ${cspSource} blob: data:`,
     `font-src ${cspSource}`,
     `style-src ${cspSource} 'nonce-${n}'`,
+    // KaTeX emits per-glyph inline `style="..."` attributes to position math; allow inline
+    // style ATTRIBUTES only (style-src-attr), keeping <style>/<link> nonce-locked above.
+    `style-src-attr 'unsafe-inline'`,
     `script-src 'nonce-${n}' ${cspSource}`,
     `worker-src ${cspSource} blob:`,
     `connect-src ${cspSource} blob: data:`,
@@ -39,6 +45,7 @@ export function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): stri
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link href="${katexCssUri}" rel="stylesheet" nonce="${n}" />
   <link href="${cssUri}" rel="stylesheet" nonce="${n}" />
   <title>Paper Reader</title>
 </head>

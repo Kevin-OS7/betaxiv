@@ -53,13 +53,18 @@ bullet points), figures shown inline, and annotated citations. Fill every field:
   - `sections[]` — `{ heading, page, blocks[] }` for the meaningful sections. `page` is the
     1-based source page where the section starts; use `null` only if genuinely unknown.
     `blocks[]` is **ordered prose**, each block one of:
-    - `{ "type": "paragraph", "text": "…" }` — flowing prose. Inline emphasis: `**bold**`
-      and `` `code` `` are supported; nothing else (no headings/links/images in text).
+    - `{ "type": "paragraph", "text": "…" }` — flowing prose. Inline emphasis: `**bold**`,
+      `` `code` ``, and inline math `$…$` (LaTeX, rendered with KaTeX) are supported; nothing
+      else (no headings/links/images in text). LaTeX backslashes are doubled in JSON just like
+      in a `formula`, e.g. `{ "type": "paragraph", "text": "the loss $\\mathcal{L}$ is …" }`.
     - `{ "type": "bullets", "items": ["…", "…"] }` — a list where it genuinely helps. Set
       `"ordered": true` for a **numbered** list. An item is a string, **or**
       `{ "text": "…", "items": [...], "ordered"?: bool }` to nest a **sub-list** (outline /
       tab-like indentation); sub-lists can be ordered independently.
-    - `{ "type": "formula", "text": "y = F(x, {W_i}) + x" }` — shown verbatim in a mono box.
+    - `{ "type": "formula", "text": "y = F(x, \\{W_i\\}) + x" }` — a **display equation in
+      LaTeX**, rendered as real typeset math (KaTeX). Write the body only (no `$$`); use
+      `\frac`, `^`, `_`, `\sqrt`, `\sum`, `\mathrm`, Greek (`\alpha`), etc. Remember JSON
+      needs each LaTeX backslash doubled (`\\frac`, `\\sqrt`).
     - `{ "type": "figure", "label": "Figure 2" }` — places a figure inline **here**; `label`
       must match an entry in `figures[]`. This is how figures appear in the reading flow.
     Write real prose. Prefer paragraphs; reach for bullets only for genuinely enumerable

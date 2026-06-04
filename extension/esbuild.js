@@ -55,6 +55,26 @@ function copyPdfjs() {
   console.log(`[pdfjs] vendored ${lib} + ${worker} + standard_fonts + cmaps -> media/vendor/pdfjs/`);
 }
 
+// Vendor KaTeX's stylesheet + web fonts so equations render as real (publication-style)
+// math, offline and CDN-free (rule 1). The KaTeX *JS* is bundled into webview.js via the
+// `import "katex"` in webview.ts; only the CSS + fonts need to be copied as static assets.
+function copyKatex() {
+  const pkgRoot = path.dirname(require.resolve("katex/package.json"));
+  const outDir = path.join(root, "media", "vendor", "katex");
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.copyFileSync(
+    path.join(pkgRoot, "dist", "katex.min.css"),
+    path.join(outDir, "katex.min.css")
+  );
+  // The CSS resolves font URLs relative to itself (fonts/KaTeX_*.woff2, …), so the fonts
+  // folder must sit next to katex.min.css. Chromium (the webview engine) prefers woff2, but
+  // we copy the whole folder so every @font-face src resolves without 404s.
+  fs.cpSync(path.join(pkgRoot, "dist", "fonts"), path.join(outDir, "fonts"), {
+    recursive: true,
+  });
+  console.log("[katex] vendored katex.min.css + fonts -> media/vendor/katex/");
+}
+
 // --- Build configs ----------------------------------------------------------
 const hostConfig = {
   entryPoints: [path.join(root, "src", "extension.ts")],
@@ -113,6 +133,7 @@ function copyAssets() {
 
 async function main() {
   copyPdfjs();
+  copyKatex();
   copyAssets();
   if (watch) {
     const hostCtx = await esbuild.context(hostConfig);

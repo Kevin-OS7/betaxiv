@@ -136,7 +136,7 @@
                         "type": { "const": "formula" },
                         "text": {
                           "type": "string",
-                          "description": "Equation or expression, shown verbatim in a monospace box (e.g. 'y = F(x, {W_i}) + x')."
+                          "description": "A display equation written in LaTeX, rendered as real math via KaTeX (no $ delimiters; the body only, e.g. 'y = F(x, \\{W_i\\}) + x' or '\\mathrm{Attention}(Q,K,V) = \\mathrm{softmax}\\!\\left(\\frac{QK^\\top}{\\sqrt{d_k}}\\right)V'). Use \\frac, ^, _, \\sqrt, \\sum, Greek (\\alpha), etc. For inline math inside paragraph text, wrap LaTeX in $…$ instead."
                         }
                       }
                     },

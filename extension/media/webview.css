@@ -299,14 +299,23 @@ figure.fig figcaption {
 }
 
 .fig-image-holder {
-  display: flex;
-  justify-content: center;
+  /* Scroll horizontally when a zoomed-in figure grows past the column width. */
+  overflow-x: auto;
+  text-align: center;
 }
 
 .fig-image {
-  max-width: 100%;
+  /* --fig-w is the column-fit width at zoom 1 (set per-canvas by the webview). At zoom 1 we
+     cap to the column with min(…, 100%) so a stale --fig-w (e.g. computed against the fallback
+     width while the pane was collapsed) never overflows a narrow column or overshoots a wide
+     one; --summary-zoom then scales it so figures grow/shrink in lockstep with the text — and
+     only a zoomed-in figure exceeds the column. `margin:auto` centers when it fits and
+     left-aligns (fully scrollable) when it overflows. */
+  width: calc(min(var(--fig-w, 100%), 100%) * var(--summary-zoom, 1));
+  max-width: none;
   height: auto;
   display: block;
+  margin: 0 auto;
   border-radius: 3px;
   background: #fff;
 }
@@ -315,6 +324,7 @@ figure.fig figcaption {
   font-size: 0.85em;
   color: var(--vscode-descriptionForeground);
   padding: 14px 0;
+  text-align: center;
 }
 
 .fig-missing {
@@ -343,15 +353,24 @@ figure.fig figcaption {
   border-radius: 3px;
 }
 
+/* Display equation: KaTeX (.katex-display) already centers and sizes in em, so it scales with
+   --summary-zoom like the surrounding text. We only own vertical rhythm + horizontal scroll
+   for equations wider than the column. (No monospace/code-box look — this reads as real math.) */
 .formula {
-  font-family: var(--vscode-editor-font-family, monospace);
-  white-space: pre-wrap;
-  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
-  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.3));
-  padding: 8px 12px;
-  border-radius: 4px;
-  margin: 10px 0;
+  margin: 14px 0;
   overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Keep an inline $…$ expression on one line so it doesn't wrap mid-equation. */
+.math-inline {
+  white-space: nowrap;
+}
+
+/* KaTeX falls back to the source string as plain text on a parse error; keep it readable. */
+.formula .katex-error,
+.math-inline .katex-error {
+  color: var(--vscode-foreground);
 }
 
 /* --- Table of contents ------------------------------------------------------ */

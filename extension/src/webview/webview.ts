@@ -2,6 +2,7 @@
 // left via vendored PDF.js, and the validated summary on the right. No network, no
 // browser storage — state goes through the VS Code webview state API (rules 1 & 5).
 
+import katex from "katex";
 import type { HostMessage, PaperSummary, Block, Figure, ListItem } from "../protocol";
 import { normalizeBbox, sourceRect } from "./cropGeometry";
 
@@ -474,16 +475,36 @@ function pageBadge(page: number | null): HTMLElement | null {
   return el("span", "page-badge", `p.${page}`);
 }
 
-// Minimal, CSP-safe inline emphasis: **bold** and `code`. Everything else is a plain
-// text node, so this never touches innerHTML (rule: no innerHTML with agent text).
+// Render a LaTeX expression as real (publication-style) math via KaTeX. KaTeX builds its own
+// DOM under `into` (escaping the source), so the agent text never reaches raw innerHTML. On a
+// parse error we fall back to the verbatim source as plain text rather than KaTeX's red error
+// box, so a slightly-off expression still reads sensibly.
+function renderMath(tex: string, into: HTMLElement, displayMode: boolean): void {
+  try {
+    katex.render(tex, into, { displayMode, throwOnError: true, output: "html" });
+  } catch {
+    into.textContent = tex;
+  }
+}
+
+// Minimal, CSP-safe inline emphasis: **bold**, `code`, and $…$ inline math (KaTeX).
+// Non-markup runs are plain text nodes, so this never touches raw innerHTML with agent text.
 function inline(text: string, into: HTMLElement): void {
-  const re = /\*\*([^*]+)\*\*|`([^`]+)`/g;
+  // $…$ first so a `$x$` isn't mistaken for code; `\$` is an escaped literal dollar sign.
+  const re = /\$((?:\\\$|[^$])+?)\$|\*\*([^*]+)\*\*|`([^`]+)`/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) into.appendChild(document.createTextNode(text.slice(last, m.index)));
-    if (m[1] !== undefined) into.appendChild(el("strong", undefined, m[1]));
-    else into.appendChild(el("code", "inline-code", m[2]));
+    if (m[1] !== undefined) {
+      const span = el("span", "math-inline");
+      renderMath(m[1].replace(/\\\$/g, "$"), span, false);
+      into.appendChild(span);
+    } else if (m[2] !== undefined) {
+      into.appendChild(el("strong", undefined, m[2]));
+    } else {
+      into.appendChild(el("code", "inline-code", m[3]));
+    }
     last = re.lastIndex;
   }
   if (last < text.length) into.appendChild(document.createTextNode(text.slice(last)));
@@ -550,7 +571,14 @@ async function renderFigureImage(fig: Figure, target: HTMLElement): Promise<void
     const dpr = window.devicePixelRatio || 1;
     // Aim for a crop roughly as wide as the summary column, crisp on HiDPI.
     const targetCss = Math.min(560, Math.max(280, (summaryRoot.clientWidth || 460) - 24));
-    const scale = Math.max(1, Math.min(3, (targetCss * dpr) / (norm.wN * vp1.width)));
+    // Rasterize with extra headroom so the figure stays crisp when the summary is zoomed in
+    // (it scales via CSS in lockstep with the text — see `.fig-image` / --summary-zoom). We
+    // oversample to ~2x the display width regardless of DPR, then cap by the scale clamp.
+    const headroom = Math.max(1, 2 / dpr);
+    const scale = Math.max(
+      1,
+      Math.min(3, (targetCss * dpr * headroom) / (norm.wN * vp1.width))
+    );
     const vp = page.getViewport({ scale });
 
     const full = document.createElement("canvas");
@@ -568,6 +596,10 @@ async function renderFigureImage(fig: Figure, target: HTMLElement): Promise<void
     out.height = sh;
     out.getContext("2d")!.drawImage(full, sx, sy, sw, sh, 0, 0, sw, sh);
     out.className = "fig-image";
+    // Pin the display width (at zoom 1) so CSS can scale it by --summary-zoom in lockstep
+    // with the surrounding text. Without this the canvas would show at its raw oversampled
+    // pixel width. Divide out the headroom so zoom 1 still fits the column.
+    out.style.setProperty("--fig-w", `${Math.round(sw / (dpr * headroom))}px`);
     target.replaceChildren(out); // replaces the "rendering…" placeholder
   } catch {
     target.replaceChildren(); // drop the placeholder; the figcaption stays
@@ -627,7 +659,9 @@ function renderBlocks(
     } else if (b.type === "bullets") {
       parent.appendChild(renderList(b.items, b.ordered ?? false));
     } else if (b.type === "formula") {
-      parent.appendChild(el("div", "formula", b.text));
+      const div = el("div", "formula");
+      renderMath(b.text, div, true);
+      parent.appendChild(div);
     } else if (b.type === "figure") {
       const fig = figuresByLabel.get(b.label);
       if (fig) parent.appendChild(renderFigure(fig));

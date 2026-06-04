@@ -71,7 +71,7 @@
           },
           {
             "type": "formula",
-            "text": "Attention(Q, K, V) = softmax(Q K^T / sqrt(d_k)) V"
+            "text": "\\mathrm{Attention}(Q, K, V) = \\mathrm{softmax}\\!\\left(\\frac{QK^\\top}{\\sqrt{d_k}}\\right)V"
           },
           {
             "type": "paragraph",
