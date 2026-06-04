@@ -44,6 +44,7 @@ export interface PaperSummary {
     keyContributions: string[];
     sections: { heading: string; page: number | null; blocks: Block[] }[];
     figures: Figure[];
+    glossary: { term: string; definition: string }[];
     openQuestions: string[];
     relevantCitations: Citation[];
   };

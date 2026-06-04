@@ -69,6 +69,7 @@
         "keyContributions",
         "sections",
         "figures",
+        "glossary",
         "openQuestions",
         "relevantCitations"
       ],
@@ -178,6 +179,18 @@
                 "items": { "type": "number", "minimum": 0, "maximum": 1 },
                 "description": "Normalized [x0, y0, x1, y1] in 0..1, origin top-left, measured against the upright cropBox page (PDF.js `view`, rotation applied) — the same frame the extension renders and crops. Ground it on that page image (see the skill's crop_helper.py) rather than estimating. Null if the region is unknown (the extension then shows caption + page only)."
               }
+            }
+          }
+        },
+        "glossary": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["term", "definition"],
+            "properties": {
+              "term": { "type": "string" },
+              "definition": { "type": "string" }
             }
           }
         },

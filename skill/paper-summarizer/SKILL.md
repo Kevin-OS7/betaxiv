@@ -67,6 +67,7 @@ bullet points), figures shown inline, and annotated citations. Fill every field:
   - `figures[]` — `{ label, caption, page, bbox }` for important figures/tables. **You do
     not draw figures.** You only LOCATE each one; the extension crops the real image out of
     the rendered PDF page. See "Locating figures" below for `bbox`.
+  - `glossary[]` — `{ term, definition }` for non-obvious terms a reader would want.
   - `openQuestions[]` — limitations or questions the paper leaves open.
   - `relevantCitations[]` — `{ title, authors?, venue?, note }` for key references the paper
     builds on (like alphaXiv's "Relevant Citations"). `note` says why it matters. May be `[]`.
@@ -166,9 +167,9 @@ catch(x){ console.log("INVALID: not JSON - "+x.message); process.exit(1); }
 if(d.schemaVersion!=="2.0") e.push("schemaVersion must be \"2.0\"");
 for(const k of ["paper","summary","generatedBy"]) if(!d[k]) e.push("missing "+k);
 const s=d.summary||{};
-for(const k of ["tldr","keyContributions","sections","figures","openQuestions","relevantCitations"])
+for(const k of ["tldr","keyContributions","sections","figures","glossary","openQuestions","relevantCitations"])
   if(!(k in s)) e.push("summary."+k+" missing");
-for(const k of ["keyContributions","sections","figures","openQuestions","relevantCitations"])
+for(const k of ["keyContributions","sections","figures","glossary","openQuestions","relevantCitations"])
   if(s[k]&&!Array.isArray(s[k])) e.push("summary."+k+" must be an array");
 const BT=new Set(["paragraph","bullets","formula","figure"]);
 const labels=new Set((s.figures||[]).map(f=>f&&f.label));

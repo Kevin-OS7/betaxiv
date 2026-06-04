@@ -272,6 +272,19 @@ li > ol {
   padding-left: 24px;
 }
 
+dl {
+  margin: 4px 0;
+}
+
+dt {
+  font-weight: 600;
+}
+
+dd {
+  margin: 0 0 8px;
+  color: var(--vscode-foreground);
+}
+
 figure.fig {
   margin: 12px 0;
   padding: 8px 12px;
