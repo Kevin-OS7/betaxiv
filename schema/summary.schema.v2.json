@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/betaxiv/paper-reader/schema/summary.schema.v2.json",
-  "title": "Paper Reader Summary",
-  "description": "Versioned contract between the paper-summarizer skill (writer) and the Paper Reader VS Code extension (reader). Both sides validate against this file. v2 adds blog-style prose blocks, figure bounding boxes (the model locates figures; the extension crops the real PDF image), a date line, and annotated citations.",
+  "$id": "https://github.com/betaxiv/betaxiv/schema/summary.schema.v2.json",
+  "title": "BetaXiv Summary",
+  "description": "Versioned contract between the betaxiv-summarizer skill (writer) and the BetaXiv VS Code extension (reader). Both sides validate against this file. v2 adds blog-style prose blocks, figure bounding boxes (the model locates figures; the extension crops the real PDF image), a date line, and annotated citations.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "paper", "summary", "generatedBy"],

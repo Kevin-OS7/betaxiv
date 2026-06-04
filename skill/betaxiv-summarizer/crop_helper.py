@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """crop_helper.py — ground figure bboxes on the *same* page frame the extension crops.
 
-The Paper Reader extension crops a figure by slicing a normalized ``[x0,y0,x1,y1]``
+The BetaXiv extension crops a figure by slicing a normalized ``[x0,y0,x1,y1]``
 rectangle (0..1, origin top-left) out of the PDF.js-rendered page. PDF.js renders the
 page's ``view`` box (the cropBox) with ``/Rotate`` applied — i.e. the upright page. To
 make the model's bbox land exactly where the extension cuts, you must:

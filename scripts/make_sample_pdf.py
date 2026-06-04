@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate a tiny, valid multi-page PDF with no third-party dependencies.
 
-Used only to give Paper Reader something to open during a smoke test. Writes
+Used only to give BetaXiv something to open during a smoke test. Writes
 papers/sample.pdf. Pure stdlib — no PyMuPDF/MinerU/Marker (license rule).
 """
 import sys
@@ -20,11 +20,11 @@ def text_stream(lines):
 
 def build(path):
     pages_text = [
-        ["Paper Reader - Sample Document", "", "Page 1",
+        ["BetaXiv - Sample Document", "", "Page 1",
          "This is a placeholder PDF for smoke-testing the left pane.",
          "Drop a real paper into papers/ to read it for real."],
         ["Page 2", "", "The right pane renders the schema-validated summary",
-         "written by the paper-summarizer skill."],
+         "written by the betaxiv-summarizer skill."],
     ]
 
     objects = []  # list of raw object byte bodies (without the "N 0 obj" wrapper)

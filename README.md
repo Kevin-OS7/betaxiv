@@ -1,4 +1,4 @@
-# Paper Reader
+# BetaXiv
 
 Read papers in VS Code with the frontier model you **already pay for** — no second
 subscription, no per-token API key. Left pane: the real PDF (PDF.js). Right pane: an
@@ -11,22 +11,22 @@ agent. See [REQUIREMENTS.md](REQUIREMENTS.md) and [AGENTS.md](AGENTS.md).
 
 ```
 schema/            The contract: summary.schema.v2.json + a golden example
-skill/             paper-summarizer/SKILL.md — your agent runs this to write summaries
+skill/             betaxiv-summarizer/SKILL.md — your agent runs this to write summaries
 extension/         The VS Code extension (TypeScript, esbuild, PDF.js)
 papers/            Drop your PDFs here (git-ignored)
-.paper-reader/     Agent-written summaries land in summaries/ (git-ignored)
+.betaxiv/     Agent-written summaries land in summaries/ (git-ignored)
 ```
 
 ## How it works
 
 ```
-papers/foo.pdf ──► your agent runs the paper-summarizer skill
+papers/foo.pdf ──► your agent runs the betaxiv-summarizer skill
                           │  (reads the PDF, writes JSON)
                           ▼
-   .paper-reader/summaries/foo.summary.json   ◄── the versioned contract
+   .betaxiv/summaries/foo.summary.json   ◄── the versioned contract
                           │  (validated by schema/summary.schema.v2.json)
                           ▼
-   Paper Reader extension renders: PDF left, summary right (live-reloads on change)
+   BetaXiv extension renders: PDF left, summary right (live-reloads on change)
 ```
 
 ## Build & run the extension
@@ -51,15 +51,15 @@ launch config:
 In the dev host:
 
 1. Open or select a PDF (e.g. `papers/sample.pdf`).
-2. Run **Paper Reader: Open** from the Command Palette, or right-click the PDF in the
-   Explorer → **Paper Reader: Open**.
+2. Run **BetaXiv: Open** from the Command Palette, or right-click the PDF in the
+   Explorer → **BetaXiv: Open**.
 3. Left pane renders the PDF; right pane renders the summary if one exists.
 
 ## Smoke test (no agent needed)
 
 A ready-made fixture is included: [papers/sample.pdf](papers/sample.pdf) plus
-`.paper-reader/summaries/sample.summary.json` (a copy of the golden example). Open
-`papers/sample.pdf` with **Paper Reader: Open** and you should immediately see the PDF on
+`.betaxiv/summaries/sample.summary.json` (a copy of the golden example). Open
+`papers/sample.pdf` with **BetaXiv: Open** and you should immediately see the PDF on
 the left and a structured summary on the right. Edit the summary JSON and the right pane
 live-updates; delete it and the right pane shows the "run the skill" guidance.
 
@@ -80,19 +80,19 @@ npm test                   # both
   rejected.
 - **Integration** ([src/test/integration/](extension/src/test/integration/)) — runs in a
   downloaded VS Code via `@vscode/test-cli`. Asserts the extension activates, registers
-  **paperReader.open**, and that opening `papers/sample.pdf` creates a Paper Reader
+  **betaxiv.open**, and that opening `papers/sample.pdf` creates a BetaXiv
   webview tab. Needs a display; on headless Linux run under `xvfb-run`.
 
 ## Generating a real summary
 
 The skill (and the schema it validates against) ship inside the extension. Install it into
-your workspace with the **Paper Reader: Install Summarizer Skill** command — it copies
-`paper-summarizer` into `.agents/skills/`, `.claude/skills/`, and `.gemini/skills/` (it
+your workspace with the **BetaXiv: Install Summarizer Skill** command — it copies
+`betaxiv-summarizer` into `.agents/skills/`, `.claude/skills/`, and `.gemini/skills/` (it
 only writes files; it never launches an agent). From the repo you can also copy/symlink
-`skill/paper-summarizer/` directly.
+`skill/betaxiv-summarizer/` directly.
 
-Then drop a PDF in `papers/` and ask your agent to run **paper-summarizer** on it. It
-writes `.paper-reader/summaries/<basename>.summary.json`, and the open Paper Reader pane
+Then drop a PDF in `papers/` and ask your agent to run **betaxiv-summarizer** on it. It
+writes `.betaxiv/summaries/<basename>.summary.json`, and the open BetaXiv pane
 updates live.
 
 ## Privacy & compliance

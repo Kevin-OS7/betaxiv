@@ -1,11 +1,11 @@
 ---
-name: paper-summarizer
-description: Read a research PDF and write a structured, schema-validated summary JSON that the Paper Reader VS Code extension renders. Use when the user asks to summarize a paper in papers/, or says "run paper-summarizer", or opens Paper Reader and sees the "no summary yet" guidance.
+name: betaxiv-summarizer
+description: Read a research PDF and write a structured, schema-validated summary JSON that the BetaXiv VS Code extension renders. Use when the user asks to summarize a paper in papers/, or says "run betaxiv-summarizer", or opens BetaXiv and sees the "no summary yet" guidance.
 ---
 
-# paper-summarizer
+# betaxiv-summarizer
 
-You produce the **structured summary** that Paper Reader shows in its right pane. The
+You produce the **structured summary** that BetaXiv shows in its right pane. The
 extension is a pure renderer — **you** (the user's own agent) do all the reading and
 writing. The contract between you and the extension is a single versioned JSON file.
 
@@ -14,9 +14,9 @@ writing. The contract between you and the extension is a single versioned JSON f
 - **Input:** a PDF, normally under `papers/` (e.g. `papers/attention.pdf`). If the user
   named a specific file, use that; otherwise summarize each PDF in `papers/` that does
   not yet have an up-to-date summary.
-- **Output:** `.paper-reader/summaries/<basename>.summary.json`, where `<basename>` is the
+- **Output:** `.betaxiv/summaries/<basename>.summary.json`, where `<basename>` is the
   PDF filename without its `.pdf` extension (e.g. `papers/attention.pdf` →
-  `.paper-reader/summaries/attention.summary.json`). Create the directory if missing.
+  `.betaxiv/summaries/attention.summary.json`). Create the directory if missing.
 - **Contract:** the output MUST validate against `schema/summary.schema.v2.json`. Read
   that schema and match it exactly. `schema/example.summary.json` is a filled-in example.
 
@@ -108,8 +108,8 @@ swallows captions, author blocks, and neighboring columns. Use the bundled helpe
 `crop_helper.py` (needs `pdfplumber` — `pip install pdfplumber` if missing; Pillow ships with
 it). It sits **next to this `SKILL.md`**; your cwd is usually the workspace root, so call it by
 its full path — set `HELPER` to this skill dir's `crop_helper.py` (the directory this
-`SKILL.md` was loaded from, e.g. `.claude/skills/paper-summarizer/crop_helper.py` or
-`.agents/skills/paper-summarizer/crop_helper.py`), then use `python3 "$HELPER" …` below.
+`SKILL.md` was loaded from, e.g. `.claude/skills/betaxiv-summarizer/crop_helper.py` or
+`.agents/skills/betaxiv-summarizer/crop_helper.py`), then use `python3 "$HELPER" …` below.
 
 ### Primary: `locate` (caption-anchored, automatic)
 
@@ -177,15 +177,15 @@ required key is present at each level, arrays are arrays, `page`/`year` are inte
 date-time.
 
 The full schema is `summary.schema.v2.json`, shipped **in this skill's own directory**
-(installed at `<workspace>/.agents/skills/paper-summarizer/`, mirrored under `.claude/` and
-`.gemini/`; in the Paper Reader repo it's at `schema/summary.schema.v2.json`). The
+(installed at `<workspace>/.agents/skills/betaxiv-summarizer/`, mirrored under `.claude/` and
+`.gemini/`; in the BetaXiv repo it's at `schema/summary.schema.v2.json`). The
 extension performs the **authoritative** JSON Schema validation when it loads the file.
 
 For a quick pre-write check you can run this **dependency-free** Node snippet (no `ajv`,
 no `npm install` — works from any directory; set `SUMMARY` to the file you wrote):
 
 ```bash
-SUMMARY=.paper-reader/summaries/<basename>.summary.json node -e '
+SUMMARY=.betaxiv/summaries/<basename>.summary.json node -e '
 const fs=require("fs"); const e=[];
 let d; try { d=JSON.parse(fs.readFileSync(process.env.SUMMARY,"utf8")); }
 catch(x){ console.log("INVALID: not JSON - "+x.message); process.exit(1); }
@@ -214,7 +214,7 @@ if(!m||Number.isNaN(Date.parse(ts))||cal.getUTCFullYear()!=+m[1]||cal.getUTCMont
 console.log(e.length?("INVALID:\n- "+e.join("\n- ")):"OK");'
 ```
 
-Then write the JSON to `.paper-reader/summaries/<basename>.summary.json`. The extension's
+Then write the JSON to `.betaxiv/summaries/<basename>.summary.json`. The extension's
 file watcher live-updates the right pane the moment you save.
 
 ## Boundaries
@@ -227,5 +227,5 @@ file watcher live-updates the right pane the moment you save.
 ## Installing this skill across agents
 
 A single `SKILL.md` works across Claude Code / Codex / Gemini CLI via the Agent Skills
-standard. Place (or symlink) `skill/paper-summarizer/` under the agent's skills dir:
+standard. Place (or symlink) `skill/betaxiv-summarizer/` under the agent's skills dir:
 `.claude/skills/`, `.agents/skills/`, or `.gemini/skills/`.

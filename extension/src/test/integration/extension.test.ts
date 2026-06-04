@@ -1,14 +1,14 @@
 // Integration tests — run inside a real VS Code Extension Host (Electron) via
 // @vscode/test-cli. They exercise the host wiring: activation, command registration,
-// and that "Paper Reader: Open" opens a webview tab for a PDF.
+// and that "BetaXiv: Open" opens a webview tab for a PDF.
 
 import * as assert from "assert";
 import * as path from "path";
 import * as vscode from "vscode";
 
-const EXT_ID = "betaxiv.paper-reader";
+const EXT_ID = "betaxiv.betaxiv";
 
-suite("Paper Reader extension", () => {
+suite("BetaXiv extension", () => {
   test("extension is present and activates", async () => {
     const ext = vscode.extensions.getExtension(EXT_ID);
     assert.ok(ext, `extension ${EXT_ID} not found`);
@@ -18,27 +18,27 @@ suite("Paper Reader extension", () => {
 
   test("commands are registered", async () => {
     const commands = await vscode.commands.getCommands(true);
-    assert.ok(commands.includes("paperReader.open"), "paperReader.open missing");
+    assert.ok(commands.includes("betaxiv.open"), "betaxiv.open missing");
     assert.ok(
-      commands.includes("paperReader.installSkill"),
-      "paperReader.installSkill missing"
+      commands.includes("betaxiv.installSkill"),
+      "betaxiv.installSkill missing"
     );
   });
 
-  test("opening a PDF creates a Paper Reader webview tab", async () => {
+  test("opening a PDF creates a BetaXiv webview tab", async () => {
     // The workspace root is the repo (opened by .vscode-test.mjs); use the sample PDF.
     const folder = vscode.workspace.workspaceFolders?.[0];
     assert.ok(folder, "no workspace folder");
     const pdfUri = vscode.Uri.joinPath(folder.uri, "papers", "sample.pdf");
 
-    await vscode.commands.executeCommand("paperReader.open", pdfUri);
+    await vscode.commands.executeCommand("betaxiv.open", pdfUri);
 
     // Give the webview panel a moment to register as a tab.
     await new Promise((r) => setTimeout(r, 500));
 
     const tabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs);
-    const hasReader = tabs.some((t) => t.label.startsWith("Paper Reader: sample"));
-    assert.ok(hasReader, `no Paper Reader tab found; tabs: ${tabs.map((t) => t.label).join(", ")}`);
+    const hasReader = tabs.some((t) => t.label.startsWith("BetaXiv: sample"));
+    assert.ok(hasReader, `no BetaXiv tab found; tabs: ${tabs.map((t) => t.label).join(", ")}`);
   });
 
   test("installSkill copies SKILL.md + schema + crop_helper into a fresh agent dir", async () => {
@@ -50,7 +50,7 @@ suite("Paper Reader extension", () => {
     const chains = [".agents", ".claude", ".gemini"].map((top) => [
       vscode.Uri.joinPath(folder.uri, top),
       vscode.Uri.joinPath(folder.uri, top, "skills"),
-      vscode.Uri.joinPath(folder.uri, top, "skills", "paper-summarizer"),
+      vscode.Uri.joinPath(folder.uri, top, "skills", "betaxiv-summarizer"),
     ]);
     const exists = async (u: vscode.Uri) => {
       try {
@@ -68,9 +68,9 @@ suite("Paper Reader extension", () => {
     }
 
     try {
-      await vscode.commands.executeCommand("paperReader.installSkill");
+      await vscode.commands.executeCommand("betaxiv.installSkill");
 
-      const skillDir = vscode.Uri.joinPath(folder.uri, ".agents", "skills", "paper-summarizer");
+      const skillDir = vscode.Uri.joinPath(folder.uri, ".agents", "skills", "betaxiv-summarizer");
       // The skill body, its co-located schema, and the (load-bearing) figure helper must land.
       await vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "SKILL.md"));
       await vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "summary.schema.v2.json"));
