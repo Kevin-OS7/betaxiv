@@ -1,4 +1,4 @@
-// Build script for the Paper Reader extension.
+// Build script for the BetaXiv extension.
 //
 // Two physically separate bundles enforce the "two worlds" rule from AGENTS.md:
 //   - host:    Node/CommonJS, loaded by VS Code. `vscode` is external (runtime-provided).
@@ -44,6 +44,18 @@ function copyPdfjs() {
   fs.copyFileSync(path.join(dir, lib), path.join(outDir, "pdf.min.mjs"));
   fs.copyFileSync(path.join(dir, worker), path.join(outDir, "pdf.worker.min.mjs"));
 
+  // Vendor the viewer module (TextLayerBuilder) + its CSS so the webview gets PDF.js's own,
+  // maintained text-selection behavior instead of a hand-port. The viewer reads the core off
+  // `globalThis.pdfjsLib`, so it shares the same library instance we already load.
+  const webDir = path.join(path.dirname(dir), "web"); // sibling of the build dir
+  fs.copyFileSync(path.join(webDir, "pdf_viewer.mjs"), path.join(outDir, "pdf_viewer.mjs"));
+  fs.copyFileSync(path.join(webDir, "pdf_viewer.css"), path.join(outDir, "pdf_viewer.css"));
+  // Copy the source map too (if present) so the browser doesn't log a 404 for it.
+  const viewerMap = path.join(webDir, "pdf_viewer.mjs.map");
+  if (fs.existsSync(viewerMap)) {
+    fs.copyFileSync(viewerMap, path.join(outDir, "pdf_viewer.mjs.map"));
+  }
+
   // Vendor standard (base-14) font data and CMaps so base-14 fonts and CJK encodings
   // render offline (no standardFontDataUrl/cMapUrl warnings, no network).
   for (const sub of ["standard_fonts", "cmaps"]) {
@@ -52,7 +64,9 @@ function copyPdfjs() {
       fs.cpSync(src, path.join(outDir, sub), { recursive: true });
     }
   }
-  console.log(`[pdfjs] vendored ${lib} + ${worker} + standard_fonts + cmaps -> media/vendor/pdfjs/`);
+  console.log(
+    `[pdfjs] vendored ${lib} + ${worker} + pdf_viewer.mjs/.css + standard_fonts + cmaps -> media/vendor/pdfjs/`
+  );
 }
 
 // Vendor KaTeX's stylesheet + web fonts so equations render as real (publication-style)
@@ -105,11 +119,11 @@ const webviewConfig = {
 // INTO the extension so they ship in the VSIX. Repo root stays the single source of truth.
 function copyAssets() {
   const repoRoot = path.resolve(root, "..");
-  const skillSrc = path.join(repoRoot, "skill", "paper-summarizer");
+  const skillSrc = path.join(repoRoot, "skill", "betaxiv-summarizer");
   const schemaFile = path.join(repoRoot, "schema", "summary.schema.v2.json");
   const exampleFile = path.join(repoRoot, "schema", "example.summary.json");
 
-  const skillDst = path.join(root, "assets", "skill", "paper-summarizer");
+  const skillDst = path.join(root, "assets", "skill", "betaxiv-summarizer");
   // Purge the dest first: cpSync(filter) only skips copying — it never deletes pre-existing
   // files, so a stale __pycache__/*.pyc from an earlier build would otherwise survive and ship
   // in the VSIX (built from the generated assets/**). Wipe, then re-vendor cleanly.
@@ -128,7 +142,7 @@ function copyAssets() {
   fs.copyFileSync(schemaFile, path.join(schemaDst, "summary.schema.v2.json"));
   fs.copyFileSync(exampleFile, path.join(schemaDst, "example.summary.json"));
 
-  console.log("[assets] vendored skill/paper-summarizer + schema -> assets/");
+  console.log("[assets] vendored skill/betaxiv-summarizer + schema -> assets/");
 }
 
 async function main() {

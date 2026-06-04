@@ -24,6 +24,9 @@ export function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): stri
   const katexCssUri = webview.asWebviewUri(
     vscode.Uri.joinPath(extensionUri, "media", "vendor", "katex", "katex.min.css")
   );
+  const pdfViewerCssUri = webview.asWebviewUri(
+    vscode.Uri.joinPath(extensionUri, "media", "vendor", "pdfjs", "pdf_viewer.css")
+  );
   const cspSource = webview.cspSource;
 
   const csp = [
@@ -46,8 +49,10 @@ export function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): stri
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link href="${katexCssUri}" rel="stylesheet" nonce="${n}" />
+  <!-- PDF.js's own text-layer styles (selection glue). Loaded before our CSS so ours wins. -->
+  <link href="${pdfViewerCssUri}" rel="stylesheet" nonce="${n}" />
   <link href="${cssUri}" rel="stylesheet" nonce="${n}" />
-  <title>Paper Reader</title>
+  <title>BetaXiv</title>
 </head>
 <body>
   <div id="app">

@@ -4,6 +4,30 @@
 /** A normalized figure region on a page: [x0, y0, x1, y1] in 0..1, origin top-left. */
 export type Bbox = [number, number, number, number];
 
+/**
+ * One highlight rectangle, normalized 0..1 against the page's UPRIGHT cropBox viewport
+ * (the same frame as figure `Bbox` — see cropGeometry). A multi-line selection produces
+ * several rects (one per text line), so a highlight follows the text rather than boxing it.
+ */
+export interface AnnotationRect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** A user-created highlight (optionally with a note), anchored to a page region. */
+export interface Annotation {
+  id: string;
+  page: number; // 1-based source page
+  rects: AnnotationRect[]; // normalized 0..1, upright cropBox frame
+  text: string; // the quoted/selected text
+  note: string; // free-form note; "" when the highlight has no note
+  color: string; // palette key: "yellow" | "green" | "blue" | "pink"
+  createdAt: string; // ISO 8601
+  updatedAt: string; // ISO 8601
+}
+
 /** A list item: a plain string, or an object with its own (optionally ordered) sub-list. */
 export type ListItem = string | { text: string; ordered?: boolean; items?: ListItem[] };
 
@@ -61,15 +85,21 @@ export type HostMessage =
       type: "bootstrap";
       pdfUri: string;
       pdfjsLibUri: string;
+      pdfViewerLibUri: string;
       pdfWorkerUri: string;
       cMapUri: string;
       standardFontUri: string;
     }
   | { type: "summary"; summary: PaperSummary }
   | { type: "summary-missing"; summaryRelPath: string; skillName: string }
-  | { type: "summary-invalid"; summaryRelPath: string; errors: string[] };
+  | { type: "summary-invalid"; summaryRelPath: string; errors: string[] }
+  | { type: "annotations"; annotations: Annotation[] };
 
 /** Webview -> host messages. */
 export type WebviewMessage =
   | { type: "ready" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  // The webview owns annotation editing; it posts the full set after each change and the
+  // host persists it to `.betaxiv/annotations/<basename>.json` (the webview never
+  // touches the filesystem — same boundary as the summary JSON).
+  | { type: "annotations-save"; annotations: Annotation[] };

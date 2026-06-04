@@ -1,4 +1,4 @@
-// Paper Reader — extension host (Node world).
+// BetaXiv — extension host (Node world).
 //
 // Pure renderer + file watcher. It NEVER calls a model, touches OAuth/API keys, or
 // launches an agent (AGENTS.md rules 1 & 2). It opens a 2-pane webview, streams the
@@ -7,9 +7,9 @@
 import * as vscode from "vscode";
 import { getHtml } from "./getHtml";
 import { validateSummaryBytes } from "./validateSummary";
-import type { HostMessage } from "./protocol";
+import type { HostMessage, Annotation } from "./protocol";
 
-const SKILL_NAME = "paper-summarizer";
+const SKILL_NAME = "betaxiv-summarizer";
 
 // Agent Skills dirs we install into, relative to the workspace root. A single SKILL.md
 // works across Claude Code / Codex / Gemini CLI via the .agents/skills alias hub.
@@ -17,14 +17,14 @@ const SKILL_TARGET_DIRS = [".agents/skills", ".claude/skills", ".gemini/skills"]
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
-    vscode.commands.registerCommand("paperReader.open", async (uriArg?: vscode.Uri) => {
+    vscode.commands.registerCommand("betaxiv.open", async (uriArg?: vscode.Uri) => {
       const pdfUri = await resolvePdfUri(uriArg);
       if (!pdfUri) {
         return;
       }
       openReader(context, pdfUri);
     }),
-    vscode.commands.registerCommand("paperReader.installSkill", () =>
+    vscode.commands.registerCommand("betaxiv.installSkill", () =>
       installSkill(context)
     )
   );
@@ -49,7 +49,7 @@ async function resolvePdfUri(uriArg?: vscode.Uri): Promise<vscode.Uri | undefine
 
   const picked = await vscode.window.showOpenDialog({
     canSelectMany: false,
-    openLabel: "Open in Paper Reader",
+    openLabel: "Open in BetaXiv",
     filters: { PDF: ["pdf"] },
   });
   return picked?.[0];
@@ -70,8 +70,8 @@ function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri): void 
   const disposables: vscode.Disposable[] = [];
 
   const panel = vscode.window.createWebviewPanel(
-    "paperReader",
-    `Paper Reader: ${basename}`,
+    "betaxiv",
+    `BetaXiv: ${basename}`,
     vscode.ViewColumn.Active,
     {
       enableScripts: true,
@@ -83,12 +83,19 @@ function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri): void 
   const summaryUri = workspaceFolder
     ? vscode.Uri.joinPath(
         workspaceFolder.uri,
-        ".paper-reader",
+        ".betaxiv",
         "summaries",
         `${basename}.summary.json`
       )
     : undefined;
-  const summaryRelPath = `.paper-reader/summaries/${basename}.summary.json`;
+  const summaryRelPath = `.betaxiv/summaries/${basename}.summary.json`;
+
+  // Highlights + notes the user creates in the webview. The webview is the source of truth
+  // during a session; the host just loads this once on open and writes it back on each edit
+  // (same file boundary as the summary — the webview never touches the filesystem).
+  const annotationsUri = workspaceFolder
+    ? vscode.Uri.joinPath(workspaceFolder.uri, ".betaxiv", "annotations", `${basename}.json`)
+    : undefined;
 
   const post = (msg: HostMessage) => panel.webview.postMessage(msg);
 
@@ -112,6 +119,31 @@ function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri): void 
     }
   };
 
+  const sendAnnotations = async () => {
+    if (!annotationsUri) {
+      post({ type: "annotations", annotations: [] });
+      return;
+    }
+    let annotations: Annotation[] = [];
+    try {
+      const bytes = await vscode.workspace.fs.readFile(annotationsUri);
+      const data = JSON.parse(new TextDecoder().decode(bytes));
+      // Accept the wrapped `{ annotations: [...] }` form (what we write) or a bare array.
+      const list = Array.isArray(data) ? data : data?.annotations;
+      if (Array.isArray(list)) annotations = list;
+    } catch {
+      // No file yet, or malformed → start empty (the webview will create the file on first edit).
+    }
+    post({ type: "annotations", annotations });
+  };
+
+  const saveAnnotations = async (annotations: Annotation[]) => {
+    if (!annotationsUri) return;
+    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(annotationsUri, ".."));
+    const body = JSON.stringify({ annotations }, null, 2);
+    await vscode.workspace.fs.writeFile(annotationsUri, new TextEncoder().encode(body));
+  };
+
   // Wait for the webview's ready handshake before posting (avoids a race).
   disposables.push(
     panel.webview.onDidReceiveMessage((msg) => {
@@ -124,14 +156,18 @@ function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri): void 
           type: "bootstrap",
           pdfUri: panel.webview.asWebviewUri(pdfUri).toString(),
           pdfjsLibUri: vendor("pdf.min.mjs"),
+          pdfViewerLibUri: vendor("pdf_viewer.mjs"),
           pdfWorkerUri: vendor("pdf.worker.min.mjs"),
           // PDF.js fetches "<dir>/<name>" — directory URIs must end with a slash.
           cMapUri: vendor("cmaps") + "/",
           standardFontUri: vendor("standard_fonts") + "/",
         });
         void sendSummary();
+        void sendAnnotations();
+      } else if (msg?.type === "annotations-save") {
+        void saveAnnotations(Array.isArray(msg.annotations) ? msg.annotations : []);
       } else if (msg?.type === "error") {
-        console.error("[paper-reader] webview error:", msg.message);
+        console.error("[betaxiv] webview error:", msg.message);
       }
     })
   );
@@ -179,7 +215,7 @@ function localRoots(extensionUri: vscode.Uri, pdfUri: vscode.Uri): vscode.Uri[] 
 }
 
 /**
- * Copy the bundled paper-summarizer skill into the workspace's agent skill dirs so the
+ * Copy the bundled betaxiv-summarizer skill into the workspace's agent skill dirs so the
  * user's own agent can run it. This writes files only — it never launches an agent
  * (rule 2). The human triggers the agent themselves afterward.
  */
@@ -187,7 +223,7 @@ async function installSkill(context: vscode.ExtensionContext): Promise<void> {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceFolder) {
     void vscode.window.showErrorMessage(
-      "Paper Reader: open a folder/workspace first to install the skill into it."
+      "BetaXiv: open a folder/workspace first to install the skill into it."
     );
     return;
   }
@@ -202,7 +238,7 @@ async function installSkill(context: vscode.ExtensionContext): Promise<void> {
     await vscode.workspace.fs.stat(source);
   } catch {
     void vscode.window.showErrorMessage(
-      "Paper Reader: bundled skill assets are missing from this build."
+      "BetaXiv: bundled skill assets are missing from this build."
     );
     return;
   }
@@ -218,7 +254,7 @@ async function installSkill(context: vscode.ExtensionContext): Promise<void> {
   }
 
   void vscode.window.showInformationMessage(
-    `Paper Reader: installed the ${SKILL_NAME} skill into ${written.join(", ")}. ` +
+    `BetaXiv: installed the ${SKILL_NAME} skill into ${written.join(", ")}. ` +
       `Run it with your own agent on a PDF in papers/.`
   );
 }

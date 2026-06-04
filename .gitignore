@@ -1,8 +1,11 @@
 # User PDFs and agent-generated summaries stay local (privacy: never leave the machine).
 papers/*
 !papers/.gitkeep
-.paper-reader/summaries/*
-!.paper-reader/summaries/.gitkeep
+.betaxiv/summaries/*
+!.betaxiv/summaries/.gitkeep
+
+# Highlights + notes are personal reading annotations — stay local (privacy), like summaries.
+.betaxiv/annotations/
 
 # Extension build artifacts and deps.
 extension/node_modules/

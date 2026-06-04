@@ -3,8 +3,25 @@
 // browser storage — state goes through the VS Code webview state API (rules 1 & 5).
 
 import katex from "katex";
-import type { HostMessage, PaperSummary, Block, Figure, ListItem } from "../protocol";
+import type {
+  HostMessage,
+  PaperSummary,
+  Block,
+  Figure,
+  ListItem,
+  Annotation,
+  AnnotationRect,
+} from "../protocol";
 import { normalizeBbox, sourceRect } from "./cropGeometry";
+import {
+  AnnotationStore,
+  ANNOTATION_COLORS,
+  DEFAULT_COLOR,
+  normalizeClientRects,
+  denormRect,
+  pointInRects,
+} from "./annotations";
+import { enableCopyReflow } from "./textLayerSelection";
 
 interface VsCodeApi {
   postMessage(msg: unknown): void;
@@ -18,6 +35,13 @@ const vscode = acquireVsCodeApi();
 const pdfStatus = document.getElementById("pdf-status") as HTMLElement;
 const pdfPages = document.getElementById("pdf-pages") as HTMLElement;
 const summaryRoot = document.getElementById("summary-root") as HTMLElement;
+
+// Annotation state (highlights + notes). The store fires its onChange only on user edits,
+// which we debounce-persist to the host; loading from the host (setAll) does not echo back.
+// The UI wiring (toolbar, popover, painting, hit-testing) lives in the annotation section
+// further down — all function declarations, so it is hoisted above first use in renderSlot.
+const annoStore = new AnnotationStore((items) => scheduleAnnoSave(items));
+let currentSelectionAnchor: SelectionAnchor | null = null;
 
 // The loaded PDF document, hoisted to module scope so the summary renderer can crop
 // figure images out of pages. renderPdf() resolves it once getDocument() completes; the
@@ -44,7 +68,14 @@ window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
   const msg = event.data;
   switch (msg.type) {
     case "bootstrap":
-      void renderPdf(msg.pdfUri, msg.pdfjsLibUri, msg.pdfWorkerUri, msg.cMapUri, msg.standardFontUri);
+      void renderPdf(
+        msg.pdfUri,
+        msg.pdfjsLibUri,
+        msg.pdfViewerLibUri,
+        msg.pdfWorkerUri,
+        msg.cMapUri,
+        msg.standardFontUri
+      );
       break;
     case "summary":
       renderSummary(msg.summary);
@@ -57,6 +88,10 @@ window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
     case "summary-invalid":
       renderInvalid(msg.summaryRelPath, msg.errors);
       setSummaryStatus("invalid");
+      break;
+    case "annotations":
+      annoStore.setAll(msg.annotations);
+      repaintAllAnnotations();
       break;
   }
 });
@@ -168,6 +203,7 @@ window.addEventListener("mouseup", () => {
 async function renderPdf(
   pdfUri: string,
   libUri: string,
+  viewerLibUri: string,
   workerUri: string,
   cMapUri: string,
   standardFontUri: string
@@ -175,6 +211,13 @@ async function renderPdf(
   try {
     // pdf.js is a vendored .mjs loaded from a local, CSP-pinned URI (not bundled).
     const pdfjsLib: any = await import(/* @vite-ignore */ libUri);
+
+    // The viewer module (TextLayerBuilder) reads the core off `globalThis.pdfjsLib`, so expose
+    // the instance we just loaded BEFORE importing it — then they share one library. We use
+    // PDF.js's own TextLayerBuilder for the text layer to get its maintained selection glue.
+    (globalThis as unknown as { pdfjsLib: unknown }).pdfjsLib = pdfjsLib;
+    const viewerLib: any = await import(/* @vite-ignore */ viewerLibUri);
+    const TextLayerBuilder = viewerLib.TextLayerBuilder;
 
     // VS Code serves webview resources from a different origin (vscode-cdn.net), and
     // browsers refuse to spawn a Worker from a cross-origin URL — PDF.js silently falls
@@ -228,6 +271,9 @@ async function renderPdf(
       page?: any;
       viewport?: any;
       canvas?: HTMLCanvasElement;
+      tlb?: any; // PDF.js TextLayerBuilder instance (owns the text layer + selection glue)
+      textLayer?: HTMLDivElement; // tlb.div: transparent selectable text, over the canvas
+      annoLayer?: HTMLDivElement; // highlight rectangles, under the text layer
       rendering?: boolean;
     }
 
@@ -247,6 +293,7 @@ async function renderPdf(
     for (let i = 1; i <= doc.numPages; i++) {
       const el = document.createElement("div");
       el.className = "page-slot";
+      el.dataset.page = String(i); // lets the annotation hit-test resolve a click's page
       el.style.width = estWidth;
       el.style.height = estHeight;
       pdfPages.appendChild(el);
@@ -275,8 +322,16 @@ async function renderPdf(
         }
         if (worst < 0) break;
         const victim = rendered.splice(worst, 1)[0];
+        // Drop all three layers together so an evicted page doesn't leave a blank canvas
+        // with floating selectable text / highlights over it.
         victim.canvas?.remove();
         victim.canvas = undefined;
+        victim.tlb?.cancel(); // deregisters from PDF.js's global selection listener
+        victim.tlb = undefined;
+        victim.textLayer?.remove();
+        victim.textLayer = undefined;
+        victim.annoLayer?.remove();
+        victim.annoLayer = undefined;
       }
     };
 
@@ -308,6 +363,33 @@ async function renderPdf(
         }).promise;
         rendered.push(slot);
         releaseFarthest(slot);
+
+        // Highlight overlay (under the text) + transparent selectable text layer (on top).
+        // Both are sized to the canvas's CSS box; the text layer needs --scale-factor so
+        // PDF.js positions its spans at the current zoom (see the .textLayer CSS).
+        const cssW = Math.floor(slot.viewport.width);
+        const cssH = Math.floor(slot.viewport.height);
+        const annoLayer = document.createElement("div");
+        annoLayer.className = "anno-layer";
+        slot.el.appendChild(annoLayer);
+        slot.annoLayer = annoLayer;
+        paintAnnoLayer(annoLayer, slot.pageNum, cssW, cssH);
+
+        try {
+          const tlb = new TextLayerBuilder({ pdfPage: slot.page });
+          await tlb.render(slot.viewport);
+          // The standalone builder doesn't set --scale-factor (PDF.js's page view normally
+          // does); its text-layer CSS needs it to position spans at the current zoom.
+          tlb.div.style.setProperty("--scale-factor", String(slot.viewport.scale));
+          slot.el.appendChild(tlb.div);
+          slot.tlb = tlb;
+          slot.textLayer = tlb.div;
+        } catch {
+          // The text layer is a selection convenience; if it fails the page still renders.
+          slot.tlb?.cancel();
+          slot.tlb = undefined;
+          slot.textLayer = undefined;
+        }
       } finally {
         slot.rendering = false;
       }
@@ -361,6 +443,10 @@ async function renderPdf(
       for (const slot of slots) {
         slot.canvas?.remove();
         slot.canvas = undefined;
+        slot.tlb?.cancel();
+        slot.tlb = undefined;
+        slot.textLayer = undefined;
+        slot.annoLayer = undefined;
         slot.el.replaceChildren();
         if (slot.page) {
           const base = slot.page.getViewport({ scale: 1 });
@@ -832,6 +918,311 @@ function renderInvalid(summaryRelPath: string, errors: string[]): void {
   summaryRoot.className = "";
   summaryRoot.replaceChildren(card);
 }
+
+// --- Annotations: highlights + notes UI -------------------------------------
+// The webview owns editing in memory; the host owns the file. Highlights sit UNDER the
+// transparent text layer (so text stays selectable everywhere) and are hit-tested by
+// coordinate on click rather than via pointer events.
+
+interface SelectionAnchor {
+  page: number;
+  rects: AnnotationRect[];
+  text: string;
+}
+
+function genId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  return c?.randomUUID
+    ? c.randomUUID()
+    : `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Editing a note fires per keystroke; coalesce before posting the full set to the host.
+let annoSaveTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleAnnoSave(items: Annotation[]): void {
+  if (annoSaveTimer) clearTimeout(annoSaveTimer);
+  const snapshot = items.map((a) => ({ ...a, rects: a.rects.map((r) => ({ ...r })) }));
+  annoSaveTimer = setTimeout(
+    () => vscode.postMessage({ type: "annotations-save", annotations: snapshot }),
+    300
+  );
+}
+
+// Paint one page's highlight rects into its overlay (px sizes from the normalized rects and
+// the page's current rendered size).
+function paintAnnoLayer(layer: HTMLElement, pageNum: number, width: number, height: number): void {
+  // Fills go in an opacity-bearing wrapper so overlapping rects don't accumulate alpha (the
+  // overlap reads at the same strength as the rest). Note markers go straight on the layer so
+  // the layer opacity doesn't fade them out.
+  const fills = document.createElement("div");
+  fills.className = "anno-fills";
+  const markers = document.createDocumentFragment();
+  for (const a of annoStore.byPage(pageNum)) {
+    a.rects.forEach((r) => {
+      const box = denormRect(r, width, height);
+      const div = document.createElement("div");
+      div.className = `anno-rect anno-${a.color}`;
+      div.style.left = `${box.left}px`;
+      div.style.top = `${box.top}px`;
+      div.style.width = `${box.width}px`;
+      div.style.height = `${box.height}px`;
+      fills.appendChild(div);
+    });
+    if (a.note && a.rects.length) {
+      const last = denormRect(a.rects[a.rects.length - 1], width, height);
+      const marker = document.createElement("div");
+      marker.className = "anno-note-marker";
+      marker.style.left = `${last.left + last.width - 3}px`;
+      marker.style.top = `${last.top - 3}px`;
+      markers.appendChild(marker);
+    }
+  }
+  layer.replaceChildren(fills, markers);
+}
+
+// Repaint every currently-rendered page (after load, edit, delete, or recolor).
+function repaintAllAnnotations(): void {
+  for (const slotEl of Array.from(pdfPages.querySelectorAll<HTMLElement>(".page-slot"))) {
+    const layer = slotEl.querySelector<HTMLElement>(".anno-layer");
+    const canvas = slotEl.querySelector("canvas");
+    const page = Number(slotEl.dataset.page);
+    if (layer && canvas && page) {
+      paintAnnoLayer(layer, page, canvas.clientWidth, canvas.clientHeight);
+    }
+  }
+}
+
+// Build a SelectionAnchor from the live text selection, or null if empty / outside the PDF.
+// A multi-page selection anchors to its START page (later-page rects are dropped); the quoted
+// text keeps the whole selection.
+function computeSelectionAnchor(): SelectionAnchor | null {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+  const range = sel.getRangeAt(0);
+  const startEl =
+    range.startContainer.nodeType === Node.TEXT_NODE
+      ? range.startContainer.parentElement
+      : (range.startContainer as HTMLElement);
+  const slotEl = startEl?.closest<HTMLElement>(".page-slot");
+  if (!slotEl || !pdfPages.contains(slotEl)) return null;
+  const canvas = slotEl.querySelector("canvas");
+  const page = Number(slotEl.dataset.page);
+  if (!canvas || !page) return null;
+  const ref = canvas.getBoundingClientRect();
+  // A selection can span pages; keep only the client rects whose center lands on this page.
+  const onPage = Array.from(range.getClientRects()).filter((r) => {
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    return cx >= ref.left && cx <= ref.right && cy >= ref.top && cy <= ref.bottom;
+  });
+  const rects = normalizeClientRects(onPage, ref);
+  if (!rects.length) return null;
+  return { page, rects, text: sel.toString() };
+}
+
+function createAnnotation(anchor: SelectionAnchor, color: string, note: string): Annotation {
+  const now = new Date().toISOString();
+  const a: Annotation = {
+    id: genId(),
+    page: anchor.page,
+    rects: anchor.rects,
+    text: anchor.text,
+    note,
+    color,
+    createdAt: now,
+    updatedAt: now,
+  };
+  annoStore.add(a);
+  repaintAllAnnotations();
+  return a;
+}
+
+function hitTestAnnotation(slotEl: HTMLElement, clientX: number, clientY: number): Annotation | null {
+  const canvas = slotEl.querySelector("canvas");
+  const page = Number(slotEl.dataset.page);
+  if (!canvas || !page) return null;
+  const ref = canvas.getBoundingClientRect();
+  if (ref.width <= 0 || ref.height <= 0) return null;
+  const px = (clientX - ref.left) / ref.width;
+  const py = (clientY - ref.top) / ref.height;
+  const list = annoStore.byPage(page);
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (pointInRects(px, py, list[i].rects)) return list[i];
+  }
+  return null;
+}
+
+// Floating selection toolbar: color swatches + a Note action.
+const selToolbar = document.createElement("div");
+selToolbar.id = "sel-toolbar";
+selToolbar.hidden = true;
+for (const color of ANNOTATION_COLORS) {
+  const sw = document.createElement("button");
+  sw.className = `swatch anno-${color}`;
+  sw.title = `Highlight (${color})`;
+  sw.setAttribute("aria-label", `Highlight ${color}`);
+  sw.addEventListener("click", () => applyHighlight(color));
+  selToolbar.appendChild(sw);
+}
+const selNoteBtn = document.createElement("button");
+selNoteBtn.className = "sel-note-btn";
+selNoteBtn.textContent = "Note";
+selNoteBtn.title = "Highlight and add a note";
+selNoteBtn.addEventListener("click", addNoteFromSelection);
+selToolbar.appendChild(selNoteBtn);
+// Pressing a toolbar button must not collapse/blur the selection before the click lands.
+selToolbar.addEventListener("mousedown", (e) => e.preventDefault());
+document.body.appendChild(selToolbar);
+
+let toolbarPos = { x: 0, y: 0 };
+function showSelToolbar(): void {
+  const sel = window.getSelection();
+  const rects = sel && sel.rangeCount ? sel.getRangeAt(0).getClientRects() : null;
+  const last = rects && rects.length ? rects[rects.length - 1] : null;
+  const anchorX = last ? last.right : window.innerWidth / 2;
+  const anchorYTop = last ? last.top : window.innerHeight / 2;
+  const anchorYBottom = last ? last.bottom : window.innerHeight / 2;
+  selToolbar.hidden = false; // unhide before measuring
+  const tb = selToolbar.getBoundingClientRect();
+  const left = Math.max(6, Math.min(window.innerWidth - tb.width - 6, anchorX - tb.width));
+  // Default below the selection's last line; flip above only if there's no room below.
+  let top = anchorYBottom + 6;
+  if (top + tb.height > window.innerHeight - 6) top = anchorYTop - tb.height - 6;
+  selToolbar.style.left = `${left}px`;
+  selToolbar.style.top = `${top}px`;
+  toolbarPos = { x: left, y: top };
+}
+function hideSelToolbar(): void {
+  selToolbar.hidden = true;
+}
+
+function applyHighlight(color: string): void {
+  if (!currentSelectionAnchor) return;
+  createAnnotation(currentSelectionAnchor, color, "");
+  window.getSelection()?.removeAllRanges();
+  currentSelectionAnchor = null;
+  hideSelToolbar();
+}
+function addNoteFromSelection(): void {
+  if (!currentSelectionAnchor) return;
+  const a = createAnnotation(currentSelectionAnchor, DEFAULT_COLOR, "");
+  const pos = toolbarPos;
+  window.getSelection()?.removeAllRanges();
+  currentSelectionAnchor = null;
+  hideSelToolbar();
+  openNotePopover(a, pos.x, pos.y);
+}
+
+// Note popover: view/edit a highlight's note, recolor, or delete it.
+let activePopoverId: string | null = null;
+const popover = document.createElement("div");
+popover.id = "note-popover";
+popover.hidden = true;
+const popQuote = document.createElement("div");
+popQuote.className = "note-quote";
+const popText = document.createElement("textarea");
+popText.className = "note-text";
+popText.placeholder = "Add a note…";
+popText.rows = 4;
+popText.addEventListener("input", () => {
+  if (!activePopoverId) return;
+  annoStore.update(activePopoverId, { note: popText.value, updatedAt: new Date().toISOString() });
+  repaintAllAnnotations(); // toggle the note marker live
+});
+const popColors = document.createElement("div");
+popColors.className = "note-colors";
+for (const color of ANNOTATION_COLORS) {
+  const sw = document.createElement("button");
+  sw.className = `swatch anno-${color}`;
+  sw.title = `Recolor (${color})`;
+  sw.addEventListener("click", () => {
+    if (!activePopoverId) return;
+    annoStore.update(activePopoverId, { color, updatedAt: new Date().toISOString() });
+    repaintAllAnnotations();
+  });
+  popColors.appendChild(sw);
+}
+const popActions = document.createElement("div");
+popActions.className = "note-actions";
+const popDelete = document.createElement("button");
+popDelete.className = "note-delete";
+popDelete.textContent = "Delete";
+popDelete.addEventListener("click", () => {
+  if (!activePopoverId) return;
+  annoStore.remove(activePopoverId);
+  repaintAllAnnotations();
+  closeNotePopover();
+});
+const popClose = document.createElement("button");
+popClose.className = "note-close";
+popClose.textContent = "Close";
+popClose.addEventListener("click", closeNotePopover);
+popActions.append(popDelete, popClose);
+popover.append(popQuote, popText, popColors, popActions);
+// Keep clicks inside the popover from reaching the global dismiss handler.
+popover.addEventListener("mousedown", (e) => e.stopPropagation());
+document.body.appendChild(popover);
+
+function openNotePopover(a: Annotation, x: number, y: number): void {
+  activePopoverId = a.id;
+  popQuote.textContent = a.text.length > 240 ? `${a.text.slice(0, 240)}…` : a.text;
+  popText.value = a.note;
+  popover.hidden = false; // unhide before measuring
+  const pb = popover.getBoundingClientRect();
+  const left = Math.max(6, Math.min(window.innerWidth - pb.width - 6, x));
+  const top = Math.max(6, Math.min(window.innerHeight - pb.height - 6, y + 8));
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+  popText.focus();
+}
+function closeNotePopover(): void {
+  popover.hidden = true;
+  activePopoverId = null;
+}
+
+// Starting any new gesture outside the transient UI dismisses it (the toolbar re-appears on
+// mouseup if a selection was made; a highlight click re-opens the popover on mouseup).
+document.addEventListener("mousedown", (e) => {
+  const t = e.target as Node;
+  if (selToolbar.contains(t) || popover.contains(t)) return;
+  hideSelToolbar();
+  closeNotePopover();
+});
+
+document.addEventListener("mouseup", (e) => {
+  const t = e.target as Node;
+  if (selToolbar.contains(t) || popover.contains(t)) return;
+  // Let the browser finalize the selection before we read it.
+  setTimeout(() => {
+    const anchor = computeSelectionAnchor();
+    if (anchor) {
+      currentSelectionAnchor = anchor;
+      showSelToolbar();
+      return;
+    }
+    // No selection → treat as a click: open a highlight's note if one was hit.
+    const el = t instanceof Element ? t : null;
+    const slotEl = el?.closest<HTMLElement>(".page-slot") ?? null;
+    if (slotEl && pdfPages.contains(slotEl)) {
+      const hit = hitTestAnnotation(slotEl, e.clientX, e.clientY);
+      if (hit) openNotePopover(hit, e.clientX, e.clientY);
+    }
+  }, 0);
+});
+
+// Clearing the selection (collapsed) hides the toolbar.
+document.addEventListener("selectionchange", () => {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed) hideSelToolbar();
+});
+
+// Toolbar positions are viewport-fixed, so a scroll invalidates them — drop it (the popover
+// is a modal editor and stays open).
+pdfPane.addEventListener("scroll", hideSelToolbar);
+
+// Reflow copied PDF text (join wrapped lines within a paragraph, break at paragraph ends),
+// overriding PDF.js's line-by-line copy. Installed once; it only acts on PDF text selections.
+enableCopyReflow();
 
 // Handshake: tell the host we're listening, so it posts bootstrap + summary.
 vscode.postMessage({ type: "ready" });
