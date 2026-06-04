@@ -23,9 +23,21 @@ backend applies page rotation, so ``image.size`` already reflects the upright pa
 """
 
 import argparse
+import re
 import sys
 
 DEFAULT_DPI = 150
+
+# A figure/table CAPTION starts with one of these markers + a number. We strip the caption
+# from the box because the summary already restates it as text below the image — keeping it
+# in the crop just wastes vertical space and looks like a duplicate title. In-figure labels
+# (axis ticks, "weight layer", "relu", legends) never match this, so they're preserved.
+CAPTION_RE = re.compile(
+    r"^\s*(figure|fig|table|tab|algorithm|alg|scheme|chart|exhibit|図|表)\b\.?\s*\d+",
+    re.IGNORECASE,
+)
+# Pixels brighter than this (0..255 luma) count as background when trimming whitespace.
+INK_THRESH = 245
 
 
 def _load_page(pdf_path, page_no):
@@ -206,6 +218,130 @@ def cmd_candidates(args):
     pdf.close()
 
 
+def _content_bbox(img, box):
+    """Tight pixel bbox of the ink inside `box` (whitespace trimmed). None if all background.
+
+    Pure-pixel, so it works on any page (rotated included): we crop the model's loose region,
+    threshold to ink, and take the bounding box of what's left — snapping the edges to the real
+    figure content and recentring it. White interior regions don't matter (it's the OUTER box
+    of all ink), so this never carves a figure apart.
+    """
+    x0, y0, x1, y1 = (int(round(v)) for v in box)
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(img.width, x1), min(img.height, y1)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    region = img.crop((x0, y0, x1, y1)).convert("L")
+    mask = region.point(lambda p: 255 if p < INK_THRESH else 0)
+    bb = mask.getbbox()
+    if not bb:
+        return None
+    return (x0 + bb[0], y0 + bb[1], x0 + bb[2], y0 + bb[3])
+
+
+def _mapped_text_lines(page, img):
+    """page text lines as pixel boxes in the upright cropBox frame: [(x0,top,x1,bottom,text)].
+
+    Returns [] on rotated pages (pdfplumber object coords don't map onto to_image's upright
+    frame there — same limitation as `candidates`), so caption stripping is simply skipped and
+    the pixel-based whitespace trim still runs.
+    """
+    if int(page.rotation or 0) % 360 != 0:
+        return []
+    cb = [float(v) for v in (page.cropbox or page.bbox)]
+    left, top = cb[0], cb[1]
+    cw, ch = cb[2] - cb[0], cb[3] - cb[1]
+    sx, sy = img.width / cw, img.height / ch
+    out = []
+    try:
+        lines = page.extract_text_lines()
+    except Exception:
+        return []
+    for ln in lines:
+        out.append((
+            (ln["x0"] - left) * sx, (ln["top"] - top) * sy,
+            (ln["x1"] - left) * sx, (ln["bottom"] - top) * sy,
+            ln.get("text", "") or "",
+        ))
+    return out
+
+
+def _strip_caption(box, lines):
+    """Shrink `box` to drop the figure/table caption block. `lines` = _mapped_text_lines output.
+
+    Find the caption marker line ("Figure 3", "Table 1", …) overlapping the box, decide whether
+    it sits below the figure (normal figure caption) or above it (typical table caption) by which
+    half of the box it lands in, then trim that edge past the whole contiguous caption block.
+    Returns the (possibly unchanged) box; never collapses it to empty.
+    """
+    bx0, by0, bx1, by1 = box
+
+    def in_box(ln):  # horizontal overlap + vertical inside (mostly) the box
+        lx0, lt, lx1, lb, _ = ln
+        return lx1 > bx0 and lx0 < bx1 and lb > by0 and lt < by1
+
+    inside = [ln for ln in lines if in_box(ln)]
+    markers = [ln for ln in inside if CAPTION_RE.match(ln[4])]
+    if not markers:
+        return box
+    mx0, mt, mx1, mb, _ = min(markers, key=lambda ln: ln[1])  # topmost marker line
+    midy = (by0 + by1) / 2.0
+
+    if mt >= midy:
+        # Caption below the figure: everything from the marker's top down is caption.
+        new_top, new_bottom = by0, mt
+    else:
+        # Caption above (tables): grow through contiguous text lines below the marker so a
+        # multi-line caption is fully removed, then trim the box top to just under it.
+        cap_bottom = mb
+        for lx0, lt, lx1, lb, _ in sorted(inside, key=lambda ln: ln[1]):
+            if lt < mt:
+                continue
+            line_h = max(1.0, lb - lt)
+            if lt - cap_bottom <= 0.9 * line_h:  # contiguous → still the caption block
+                cap_bottom = max(cap_bottom, lb)
+        new_top, new_bottom = cap_bottom, by1
+
+    if new_bottom - new_top < 0.1 * (by1 - by0):  # would gut the box → leave it for the trim step
+        return box
+    return [bx0, new_top, bx1, new_bottom]
+
+
+def cmd_tighten(args):
+    from PIL import ImageDraw
+
+    pdf, page = _load_page(args.pdf, args.page)
+    img = _render_pil(page, args.dpi)
+    w, h = img.size
+    box = list(_to_pixels(args.bbox, args.pixels, w, h))
+
+    box = _strip_caption(box, _mapped_text_lines(page, img))  # 1. drop caption (no-op if none)
+    content = _content_bbox(img, box)                          # 2. trim whitespace to the ink
+    if content is None:
+        print("tighten: no ink found in the box — is the region empty or all-white?", file=sys.stderr)
+        pdf.close()
+        return
+    pad = args.pad
+    x0, y0, x1, y1 = content
+    box = [max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad)]
+
+    if args.crop:
+        img.crop((int(box[0]), int(box[1]), int(box[2]), int(box[3]))).save(args.crop)
+        print(f"saved crop {args.crop}  ({int(box[2]-box[0])}x{int(box[3]-box[1])}px)", file=sys.stderr)
+    overlay = img.copy()
+    draw = ImageDraw.Draw(overlay)
+    lw = max(2, round(min(w, h) / 300))
+    draw.rectangle(box, outline=(220, 30, 30), width=lw)
+    overlay.save(args.out)
+    print(
+        f"saved overlay {args.out}  tightened rect="
+        f"({int(box[0])},{int(box[1])},{int(box[2])},{int(box[3])})px",
+        file=sys.stderr,
+    )
+    print(_order_clamp_norm(box[0], box[1], box[2], box[3], w, h))  # the bbox to store
+    pdf.close()
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -232,6 +368,21 @@ def main():
     g.add_argument("--bbox", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"), help="normalized 0..1")
     g.add_argument("--pixels", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"), help="pixels on the PNG")
     v.set_defaults(func=cmd_preview)
+
+    t = sub.add_parser(
+        "tighten",
+        help="refine a loose box: auto-strip the caption + trim whitespace; prints the final bbox",
+    )
+    t.add_argument("pdf")
+    t.add_argument("--page", type=int, required=True)
+    t.add_argument("--out", required=True, help="overlay PNG path")
+    t.add_argument("--crop", help="optional tightened-crop PNG path (read it to self-verify)")
+    t.add_argument("--pad", type=int, default=6, help="px of breathing room kept around the ink")
+    t.add_argument("--dpi", type=int, default=DEFAULT_DPI)
+    gt = t.add_mutually_exclusive_group(required=True)
+    gt.add_argument("--pixels", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"), help="loose box, pixels on the PNG")
+    gt.add_argument("--bbox", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"), help="loose box, normalized 0..1")
+    t.set_defaults(func=cmd_tighten)
 
     c = sub.add_parser("candidates", help="ASSIST: print pdfplumber-derived seed boxes (normalized)")
     c.add_argument("pdf")

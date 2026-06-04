@@ -97,35 +97,45 @@ skill's own directory (the directory this `SKILL.md` was loaded from, e.g.
 `.claude/skills/paper-summarizer/crop_helper.py` or `.agents/skills/paper-summarizer/crop_helper.py`),
 then use `python3 "$HELPER" …` in every call below. For each figure:
 
+**You do not need pixel-perfect edges — give a loose box, let `tighten` snap it.** Don't fuss
+over exact margins or where the caption ends. Draw a **generous** box that fully contains the
+figure, then run `tighten`: it auto-removes the caption line and trims the whitespace down to
+the real ink, so your box just has to surround the **right figure** without bleeding into a
+neighboring figure/column. For each figure:
+
 1. **Render the page** in the extension's frame:
    ```bash
    python3 "$HELPER" render <pdf> --page N --out /tmp/pageN.png   # prints "W H" (px)
    ```
-2. **Read `/tmp/pageN.png`** and locate the figure on *that* image. Return the box in
-   **pixel coordinates on the PNG**, origin top-left. Box it **tight**:
-   - **Include:** the figure body, axes, tick labels, legends, sub-panel labels; for tables,
-     all rules and the header row.
-   - **Exclude:** the caption line, author/affiliation blocks, page headers/footers/margins,
-     and any adjacent body prose.
-3. **Normalize** the pixel box to the `bbox` array:
+2. **Read `/tmp/pageN.png`** and find the figure on *that* image — match it to its caption
+   number so you box the **right one** (don't grab the title, an author block, or the wrong
+   figure). Return a **generous** box around it in **pixel coordinates on the PNG**, origin
+   top-left. Err big: include surrounding whitespace and even the caption — `tighten` strips
+   those. Only hard rule: don't let the box spill into a *different* figure, table, or text
+   column.
+3. **Tighten + self-verify** — auto-strip the caption, trim margins, and emit the final bbox:
    ```bash
-   python3 "$HELPER" normalize --png-size W H --pixels X0 Y0 X1 Y1   # prints [x0,y0,x1,y1]
+   python3 "$HELPER" tighten <pdf> --page N --pixels X0 Y0 X1 Y1 \
+       --out /tmp/overlay.png --crop /tmp/crop.png   # prints the [x0,y0,x1,y1] to store
    ```
-4. **Self-verify** — draw the box back on the page and inspect the crop:
-   ```bash
-   python3 "$HELPER" preview <pdf> --page N --pixels X0 Y0 X1 Y1 \
-       --out /tmp/overlay.png --crop /tmp/crop.png
-   ```
-   Read `/tmp/crop.png`: it must contain the whole figure and **nothing else**. If it
-   clips or bleeds, adjust the pixel box and repeat (≤2 tries). If you still can't get a
-   clean crop, set `bbox` to `null` — the extension then shows just the caption and page.
+   `tighten` prints the normalized `bbox` (use it verbatim) and writes `/tmp/crop.png`.
+   **Read `/tmp/crop.png`:** it must be the whole figure, centred, snug, **caption excluded**
+   (you already restate the caption as text, so it must not appear in the image). If it clips
+   the figure, widen the input box and rerun; if it still grabbed the wrong region, re-find it
+   on the page (step 2). After ≤2 tries you can't get a clean crop, set `bbox` to `null` — the
+   extension then shows just the caption and page.
 
-`page` is the 1-based page the figure appears on. Optional assist:
-`python3 "$HELPER" candidates <pdf> --page N` prints pdfplumber-derived seed boxes (exact for
-embedded images; clustered for vector figures/tables) you can pick from and refine — but it's
-only a hint, still verify via step 4. (On rotated pages — `/Rotate` 90/180/270 — `candidates`
-prints nothing and tells you to use `render`/`preview`; the grounded main flow handles rotation
-on its own, so you lose nothing.)
+Notes:
+- `tighten` also accepts `--bbox X0 Y0 X1 Y1` (normalized) instead of `--pixels`, and `--pad P`
+  to change the breathing room (default 6px). On rotated pages it still trims whitespace
+  (pixel-based); caption stripping is skipped there but the caption is usually outside a tight
+  ink box anyway.
+- `page` is the 1-based page the figure appears on.
+- Optional seed: `python3 "$HELPER" candidates <pdf> --page N` prints pdfplumber-derived boxes
+  (exact for embedded images; clustered for vector figures/tables). Feed one straight into
+  `tighten` as the loose box. (Prints nothing on rotated pages — just ground via `render`.)
+- `preview` / `normalize` remain available if you want to place a box by hand without the
+  auto-trim, but `tighten` is the default and handles the margin/centre/caption issues for you.
 
 Reference each figure once from a section via a `{ "type": "figure", "label": … }` block so
 it renders in context. (Any figure you list but never reference still appears in a trailing

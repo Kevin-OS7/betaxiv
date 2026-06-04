@@ -18,18 +18,28 @@ import crop_helper  # noqa: E402
 import pdfplumber  # noqa: E402
 
 
-def _make_pdf(media, crop, rect, rotate=0):
-    """Minimal one-page PDF with a filled rectangle. Boxes/rect in PDF user space (pts)."""
+def _make_pdf(media, crop, rect, rotate=0, texts=None):
+    """Minimal one-page PDF with a filled rectangle (+ optional text). Coords in PDF pts.
+
+    `texts` is a list of (x, y_baseline, string) in bottom-up PDF user space — used to plant a
+    caption line so the caption-stripping path can be exercised. Uses base-14 Helvetica (no font
+    embedding needed; license-clean).
+    """
     rx, ry, rw, rh = rect
-    content = f"{rx} {ry} {rw} {rh} re f\n".encode("latin-1")
+    body = f"{rx} {ry} {rw} {rh} re f\n"
+    for tx, ty, s in texts or []:
+        esc = s.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+        body += f"BT /F1 10 Tf {tx} {ty} Td ({esc}) Tj ET\n"
+    content = body.encode("latin-1")
     mb = " ".join(str(v) for v in media)
     cb = " ".join(str(v) for v in crop)
     objs = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
         f"<< /Type /Page /Parent 2 0 R /MediaBox [{mb}] /CropBox [{cb}] /Rotate {rotate} "
-        f"/Contents 4 0 R >>".encode(),
+        f"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".encode(),
         b"<< /Length %d >>\nstream\n" % len(content) + content + b"endstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     ]
     buf = io.BytesIO()
     buf.write(b"%PDF-1.4\n")
@@ -104,6 +114,66 @@ class CropBoxFrameTest(unittest.TestCase):
         page = pdfplumber.open(pdf).pages[0]
         # x: 144/612=0.2353 .. 360/612=0.5882 ; y top: (792-648)/792=0.1818 .. (792-216)/792=0.7273
         self.assertClose(_vec_bbox(page), [0.2353, 0.1818, 0.5882, 0.7273])
+
+
+def _tighten_box(page, loose):
+    """Run the tighten pipeline (caption-strip → whitespace-trim) and return (pixel_box, size)."""
+    img = crop_helper._render_pil(page, 72)  # dpi 72 ⇒ 1px == 1pt for a 612x792 page
+    box = crop_helper._strip_caption(list(loose), crop_helper._mapped_text_lines(page, img))
+    return crop_helper._content_bbox(img, box), img.size
+
+
+class TightenTest(unittest.TestCase):
+    def assertNear(self, got, want, tol=3):
+        self.assertLessEqual(abs(got - want), tol, f"{got} != {want} (±{tol})")
+
+    def test_whitespace_trim_snaps_a_loose_box_to_the_ink(self):
+        # rect ink at px x150..450, top y 192..392; a loose box with fat margins must snap to it.
+        pdf = _make_pdf((0, 0, 612, 792), (0, 0, 612, 792), (150, 400, 300, 200))
+        page = pdfplumber.open(pdf).pages[0]
+        box, _ = _tighten_box(page, (100, 150, 500, 450))
+        self.assertIsNotNone(box)
+        x0, y0, x1, y1 = box
+        self.assertNear(x0, 150); self.assertNear(y0, 192)
+        self.assertNear(x1, 450); self.assertNear(y1, 392)
+
+    def test_strips_a_figure_caption_below_the_image(self):
+        # Same rect (bottom edge px 392) with a "Figure 1." caption line beneath it (~px 405).
+        # Without stripping, the trim would reach down to the caption (~412); it must stop at 392.
+        pdf = _make_pdf(
+            (0, 0, 612, 792), (0, 0, 612, 792), (150, 400, 300, 200),
+            texts=[(150, 380, "Figure 1. A residual building block")],
+        )
+        page = pdfplumber.open(pdf).pages[0]
+        box, _ = _tighten_box(page, (100, 150, 500, 460))
+        self.assertIsNotNone(box)
+        self.assertNear(box[3], 392)          # bottom snaps to the figure, not the caption
+        self.assertLess(box[3], 400)
+
+    def test_strips_a_table_caption_above_the_body(self):
+        # rect body top edge px 392; a "Table 1." caption sits above it (~px 365..372). The top
+        # edge must trim down past the caption to the body, not include the caption.
+        pdf = _make_pdf(
+            (0, 0, 612, 792), (0, 0, 612, 792), (150, 200, 300, 200),
+            texts=[(150, 420, "Table 1. Network architectures")],
+        )
+        page = pdfplumber.open(pdf).pages[0]
+        box, _ = _tighten_box(page, (100, 350, 500, 610))
+        self.assertIsNotNone(box)
+        self.assertNear(box[1], 392)          # top snaps to the body, not the caption
+        self.assertGreater(box[1], 380)
+
+    def test_in_figure_labels_are_not_mistaken_for_a_caption(self):
+        # A label like "relu" inside the figure must NOT trigger caption stripping (no marker).
+        pdf = _make_pdf(
+            (0, 0, 612, 792), (0, 0, 612, 792), (150, 400, 300, 200),
+            texts=[(300, 500, "relu")],
+        )
+        page = pdfplumber.open(pdf).pages[0]
+        # _strip_caption is a no-op → box unchanged.
+        kept = crop_helper._strip_caption([100, 150, 500, 450], crop_helper._mapped_text_lines(
+            page, crop_helper._render_pil(page, 72)))
+        self.assertEqual(kept, [100, 150, 500, 450])
 
 
 class NormalizeTest(unittest.TestCase):
