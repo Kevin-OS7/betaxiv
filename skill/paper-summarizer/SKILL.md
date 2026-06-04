@@ -42,6 +42,14 @@ writing. The contract between you and the extension is a single versioned JSON f
 The goal is an **alphaXiv-style blog**: a Summary box, flowing prose sections (not bare
 bullet points), figures shown inline, and annotated citations. Fill every field:
 
+The length, structure, and style guidance below is the **default** behavior — produce that
+unless the user asks otherwise. If the user requests something different (shorter or longer,
+more technical, a specific focus, more bullets, a particular language, etc.), follow their
+request. The one thing you must **never** change is the output **format**: the result must
+still be the same JSON file that validates against `schema/summary.schema.v2.json` (same
+field names, block `type`s, and shape). Honor the user freely *within* that contract; never
+break it.
+
 - `schemaVersion`: exactly `"2.0"`.
 - `paper`: `sourcePath` (path to the PDF, relative to the workspace root, e.g.
   `papers/attention.pdf`), `title`, `authors[]`, `year` (integer or `null`), `venue`
@@ -69,6 +77,10 @@ bullet points), figures shown inline, and annotated citations. Fill every field:
       must match an entry in `figures[]`. This is how figures appear in the reading flow.
     Write real prose. Prefer paragraphs; reach for bullets only for genuinely enumerable
     points. Drop a `figure` block where the figure is first discussed.
+    **Length:** Aim for a summary a reader can finish in about 5 minutes. Each section is
+    roughly 2–4 short paragraphs; lead with the key points and favor readability over
+    exhaustive coverage. This is a *summary*, not a section-by-section transcription of the
+    paper.
   - `figures[]` — `{ label, caption, page, bbox }` for important figures/tables. **You do
     not draw figures.** You only LOCATE each one; the extension crops the real image out of
     the rendered PDF page. See "Locating figures" below for `bbox`.
