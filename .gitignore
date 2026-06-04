@@ -26,3 +26,7 @@ extension/assets/
 # OS / editor noise
 .DS_Store
 *.log
+
+# Python artifacts (crop_helper.py / its tests)
+__pycache__/
+*.pyc

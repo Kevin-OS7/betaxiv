@@ -3,6 +3,7 @@
 // browser storage — state goes through the VS Code webview state API (rules 1 & 5).
 
 import type { HostMessage, PaperSummary, Block, Figure, ListItem } from "../protocol";
+import { normalizeBbox, sourceRect } from "./cropGeometry";
 
 interface VsCodeApi {
   postMessage(msg: unknown): void;
@@ -533,24 +534,23 @@ async function renderFigureImage(fig: Figure, target: HTMLElement): Promise<void
     }
     const page = await pdfDoc.getPage(fig.page);
     if (!target.isConnected) return; // a reload landed during getPage()
-    const [a, b, c, d] = fig.bbox;
     // Normalize + clamp the bbox to [0,1] regardless of order the model emitted.
-    const x0 = Math.max(0, Math.min(1, Math.min(a, c)));
-    const x1 = Math.max(0, Math.min(1, Math.max(a, c)));
-    const y0 = Math.max(0, Math.min(1, Math.min(b, d)));
-    const y1 = Math.max(0, Math.min(1, Math.max(b, d)));
-    const wN = x1 - x0;
-    const hN = y1 - y0;
-    if (wN <= 0 || hN <= 0) {
+    const norm = normalizeBbox(fig.bbox);
+    if (!norm) {
       target.replaceChildren();
       return;
     }
 
+    // bbox is normalized against the page's UPRIGHT cropBox: getViewport applies the page
+    // `/Rotate` and uses `page.view` (cropBox ∩ mediaBox), so a rotated or cropped page is
+    // measured in its displayed orientation. This MUST match the frame the model grounded the
+    // bbox in — the skill's crop_helper.py renders the same upright cropBox (pdfplumber
+    // to_image, force_mediabox=False). Keep these two in lockstep. (See cropGeometry test.)
     const vp1 = page.getViewport({ scale: 1 });
     const dpr = window.devicePixelRatio || 1;
     // Aim for a crop roughly as wide as the summary column, crisp on HiDPI.
     const targetCss = Math.min(560, Math.max(280, (summaryRoot.clientWidth || 460) - 24));
-    const scale = Math.max(1, Math.min(3, (targetCss * dpr) / (wN * vp1.width)));
+    const scale = Math.max(1, Math.min(3, (targetCss * dpr) / (norm.wN * vp1.width)));
     const vp = page.getViewport({ scale });
 
     const full = document.createElement("canvas");
@@ -561,14 +561,7 @@ async function renderFigureImage(fig: Figure, target: HTMLElement): Promise<void
     fctx.fillRect(0, 0, full.width, full.height);
     await page.render({ canvasContext: fctx, viewport: vp }).promise;
 
-    let sx = Math.round(x0 * vp.width);
-    let sy = Math.round(y0 * vp.height);
-    let sw = Math.round(wN * vp.width);
-    let sh = Math.round(hN * vp.height);
-    sx = Math.max(0, Math.min(full.width - 1, sx));
-    sy = Math.max(0, Math.min(full.height - 1, sy));
-    sw = Math.max(1, Math.min(full.width - sx, sw));
-    sh = Math.max(1, Math.min(full.height - sy, sh));
+    const { sx, sy, sw, sh } = sourceRect(norm, vp.width, vp.height, full.width, full.height);
 
     const out = document.createElement("canvas");
     out.width = sw;

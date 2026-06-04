@@ -41,7 +41,7 @@ suite("Paper Reader extension", () => {
     assert.ok(hasReader, `no Paper Reader tab found; tabs: ${tabs.map((t) => t.label).join(", ")}`);
   });
 
-  test("installSkill copies SKILL.md + schema into a fresh agent dir", async () => {
+  test("installSkill copies SKILL.md + schema + crop_helper into a fresh agent dir", async () => {
     const folder = vscode.workspace.workspaceFolders?.[0];
     assert.ok(folder, "no workspace folder");
 
@@ -71,9 +71,15 @@ suite("Paper Reader extension", () => {
       await vscode.commands.executeCommand("paperReader.installSkill");
 
       const skillDir = vscode.Uri.joinPath(folder.uri, ".agents", "skills", "paper-summarizer");
-      // Both the skill body and its co-located schema must land on disk.
+      // The skill body, its co-located schema, and the (load-bearing) figure helper must land.
       await vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "SKILL.md"));
       await vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "summary.schema.v2.json"));
+      await vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "crop_helper.py"));
+      // Python build noise must NOT ship into users' workspaces.
+      await assert.rejects(
+        async () => vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "__pycache__")),
+        "__pycache__ should be filtered out of the vendored skill"
+      );
     } finally {
       // Delete deepest-first; skip anything that pre-existed (don't clobber a real install).
       for (const chain of chains) {

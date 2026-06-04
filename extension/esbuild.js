@@ -90,8 +90,16 @@ function copyAssets() {
   const exampleFile = path.join(repoRoot, "schema", "example.summary.json");
 
   const skillDst = path.join(root, "assets", "skill", "paper-summarizer");
+  // Purge the dest first: cpSync(filter) only skips copying — it never deletes pre-existing
+  // files, so a stale __pycache__/*.pyc from an earlier build would otherwise survive and ship
+  // in the VSIX (built from the generated assets/**). Wipe, then re-vendor cleanly.
+  fs.rmSync(skillDst, { recursive: true, force: true });
   fs.mkdirSync(skillDst, { recursive: true });
-  fs.cpSync(skillSrc, skillDst, { recursive: true });
+  // Vendor everything except Python build noise (so the VSIX / installed skill stays clean).
+  fs.cpSync(skillSrc, skillDst, {
+    recursive: true,
+    filter: (src) => !/(^|[/\\])(__pycache__|.*\.pyc)$/.test(src),
+  });
   // Co-locate the schema with the installed skill so it is self-contained in any workspace.
   fs.copyFileSync(schemaFile, path.join(skillDst, "summary.schema.v2.json"));
 

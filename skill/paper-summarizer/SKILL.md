@@ -80,15 +80,52 @@ may be `null`. Fill them whenever you can.
 ## Locating figures (bbox)
 
 You never render figures — you tell the extension **where** each figure sits and it crops
-the real pixels from the PDF page. For each `figures[]` entry give:
+the real pixels from the PDF page. The extension renders the page's **upright cropBox** (via
+PDF.js, with `/Rotate` applied) and slices the `bbox` rectangle out of it. So `bbox` is
+`[x0, y0, x1, y1]`, **normalized 0..1**, origin **top-left**, measured **against that same
+upright cropBox page**.
 
-- `page` — the 1-based page the figure appears on.
-- `bbox` — `[x0, y0, x1, y1]`, **normalized 0..1**, origin **top-left** of the page:
-  `x` increases rightward, `y` increases downward. So `[0.1, 0.08, 0.9, 0.45]` is a wide
-  box across the top portion of the page. Read the PDF natively to estimate the box; include
-  the whole figure body (and its in-figure labels) but you may exclude the caption text.
-  Err slightly **generous** rather than tight. Set `bbox` to `null` if you can't tell — the
-  extension then shows just the caption and page.
+**Do NOT eyeball coordinates.** Estimating pixel coordinates from a PDF you "read natively"
+is unreliable — you reconstruct the layout instead of grounding on the actual image, so boxes
+drift and swallow author blocks / captions / neighboring text. Instead, **ground each box on
+the exact page image the extension crops**, using the bundled helper `crop_helper.py`
+(needs `pdfplumber` — `pip install pdfplumber` if missing; Pillow ships with it).
+
+`crop_helper.py` sits **next to this `SKILL.md`**. Your cwd is usually the workspace root, not
+the skill dir, so **call it by its full path** — set `HELPER` to the `crop_helper.py` in this
+skill's own directory (the directory this `SKILL.md` was loaded from, e.g.
+`.claude/skills/paper-summarizer/crop_helper.py` or `.agents/skills/paper-summarizer/crop_helper.py`),
+then use `python3 "$HELPER" …` in every call below. For each figure:
+
+1. **Render the page** in the extension's frame:
+   ```bash
+   python3 "$HELPER" render <pdf> --page N --out /tmp/pageN.png   # prints "W H" (px)
+   ```
+2. **Read `/tmp/pageN.png`** and locate the figure on *that* image. Return the box in
+   **pixel coordinates on the PNG**, origin top-left. Box it **tight**:
+   - **Include:** the figure body, axes, tick labels, legends, sub-panel labels; for tables,
+     all rules and the header row.
+   - **Exclude:** the caption line, author/affiliation blocks, page headers/footers/margins,
+     and any adjacent body prose.
+3. **Normalize** the pixel box to the `bbox` array:
+   ```bash
+   python3 "$HELPER" normalize --png-size W H --pixels X0 Y0 X1 Y1   # prints [x0,y0,x1,y1]
+   ```
+4. **Self-verify** — draw the box back on the page and inspect the crop:
+   ```bash
+   python3 "$HELPER" preview <pdf> --page N --pixels X0 Y0 X1 Y1 \
+       --out /tmp/overlay.png --crop /tmp/crop.png
+   ```
+   Read `/tmp/crop.png`: it must contain the whole figure and **nothing else**. If it
+   clips or bleeds, adjust the pixel box and repeat (≤2 tries). If you still can't get a
+   clean crop, set `bbox` to `null` — the extension then shows just the caption and page.
+
+`page` is the 1-based page the figure appears on. Optional assist:
+`python3 "$HELPER" candidates <pdf> --page N` prints pdfplumber-derived seed boxes (exact for
+embedded images; clustered for vector figures/tables) you can pick from and refine — but it's
+only a hint, still verify via step 4. (On rotated pages — `/Rotate` 90/180/270 — `candidates`
+prints nothing and tells you to use `render`/`preview`; the grounded main flow handles rotation
+on its own, so you lose nothing.)
 
 Reference each figure once from a section via a `{ "type": "figure", "label": … }` block so
 it renders in context. (Any figure you list but never reference still appears in a trailing
