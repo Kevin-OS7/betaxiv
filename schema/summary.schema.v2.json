@@ -69,7 +69,6 @@
         "keyContributions",
         "sections",
         "figures",
-        "glossary",
         "openQuestions",
         "relevantCitations"
       ],
@@ -179,18 +178,6 @@
                 "items": { "type": "number", "minimum": 0, "maximum": 1 },
                 "description": "Normalized [x0, y0, x1, y1] in 0..1, origin top-left, of the figure region on its page. Null if the region is unknown (the extension then shows caption + page only)."
               }
-            }
-          }
-        },
-        "glossary": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["term", "definition"],
-            "properties": {
-              "term": { "type": "string" },
-              "definition": { "type": "string" }
             }
           }
         },

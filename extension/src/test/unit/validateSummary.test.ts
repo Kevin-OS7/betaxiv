@@ -80,12 +80,14 @@ test("unknown section block type is rejected", () => {
 });
 
 test("nested list item without required text is rejected", () => {
-  const bad = clone(example);
+  const bad = clone(example) as unknown as {
+    summary: { sections: { blocks: { type: string; items?: unknown[] }[] }[] };
+  };
   // Find the ordered list block and corrupt a nested item (object missing `text`).
   const block = bad.summary.sections
     .flatMap((s) => s.blocks)
-    .find((b) => (b as { type: string }).type === "bullets") as { items: unknown[] };
-  block.items.push({ items: ["orphan sub-item"] });
+    .find((b) => b.type === "bullets");
+  (block!.items as unknown[]).push({ items: ["orphan sub-item"] });
   const res = validateSummaryBytes(encode(bad));
   assert.equal(res.valid, false);
 });

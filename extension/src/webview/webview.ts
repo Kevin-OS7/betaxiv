@@ -721,18 +721,6 @@ function renderSummary(s: PaperSummary): void {
     root.appendChild(sec);
   }
 
-  // Glossary.
-  if (s.summary.glossary.length) {
-    const sec = section("Glossary");
-    const dl = document.createElement("dl");
-    for (const g of s.summary.glossary) {
-      dl.appendChild(el("dt", undefined, g.term));
-      dl.appendChild(el("dd", undefined, g.definition));
-    }
-    sec.appendChild(dl);
-    root.appendChild(sec);
-  }
-
   // Open questions.
   if (s.summary.openQuestions.length) {
     const sec = section("Open Questions");

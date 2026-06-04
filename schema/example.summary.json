@@ -127,20 +127,6 @@
         "bbox": null
       }
     ],
-    "glossary": [
-      {
-        "term": "Self-attention",
-        "definition": "An attention mechanism relating different positions of a single sequence to compute a representation of that sequence."
-      },
-      {
-        "term": "Multi-head attention",
-        "definition": "Running several attention functions in parallel on different learned projections, then concatenating their outputs."
-      },
-      {
-        "term": "Positional encoding",
-        "definition": "Sinusoidal signals added to token embeddings so the model can use sequence order without recurrence."
-      }
-    ],
     "openQuestions": [
       "How well does the Transformer generalize to modalities beyond text, such as images and audio?",
       "Can attention be made more efficient for very long sequences where the quadratic cost dominates?"
