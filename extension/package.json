@@ -1,10 +1,11 @@
 {
-  "name": "paper-reader",
-  "displayName": "Paper Reader",
+  "name": "betaxiv",
+  "displayName": "BetaXiv",
   "description": "Read papers in VS Code: real PDF on the left, an AI-generated structured summary on the right. The summary is produced by your own coding agent (Claude Code / Codex / Gemini CLI) via a bundled Agent Skill. The extension is a pure renderer — it never calls models, touches API keys, or launches agents.",
   "version": "0.1.0",
   "license": "MIT",
   "publisher": "betaxiv",
+  "icon": "media/betaxiv_logo.png",
   "engines": {
     "vscode": "^1.96.0"
   },
@@ -24,27 +25,28 @@
   "contributes": {
     "commands": [
       {
-        "command": "paperReader.open",
+        "command": "betaxiv.open",
         "title": "Open",
-        "category": "Paper Reader"
+        "category": "BetaXiv",
+        "icon": "media/betaxiv_logo.svg"
       },
       {
-        "command": "paperReader.installSkill",
+        "command": "betaxiv.installSkill",
         "title": "Install Summarizer Skill into Workspace",
-        "category": "Paper Reader"
+        "category": "BetaXiv"
       }
     ],
     "menus": {
       "explorer/context": [
         {
-          "command": "paperReader.open",
+          "command": "betaxiv.open",
           "when": "resourceExtname == .pdf",
           "group": "navigation"
         }
       ],
       "editor/title": [
         {
-          "command": "paperReader.open",
+          "command": "betaxiv.open",
           "when": "resourceExtname == .pdf",
           "group": "navigation"
         }
