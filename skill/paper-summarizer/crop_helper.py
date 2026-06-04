@@ -232,14 +232,37 @@ def _hspan_overlap(a, b):
     return max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
 
 
-def _figure_for_caption(cap, clusters, lines, left, cw, ch):
+def _caption_extent(marker, lines):
+    """Grow a caption MARKER line to its full multi-line extent (down/up through contiguous text).
+
+    A real caption is often 2-3 lines ("Table 1. … Down-sampling is performed by conv3_1 …"); only
+    the first line matches CAPTION_RE. Using the FULL extent as a barrier stops a neighbor figure
+    from swallowing the caption's continuation lines (page 5: Figure 4 vs Table 1's 2nd caption line).
+    Grows DOWNWARD only — "Figure N." always starts the caption, so continuation lines follow it;
+    growing upward would eat figure content sitting above the caption.
+    """
+    x0, t, x1, b = marker[0], marker[1], marker[2], marker[3]
+    lh = max(1.0, b - t)
+    col = sorted((ln for ln in lines
+                  if min(x1, ln[2]) - max(x0, ln[0]) > 0.3 * min(x1 - x0, ln[2] - ln[0])
+                  and ln[1] >= t - 1),  # at or below the marker
+                 key=lambda ln: ln[1])
+    for ln in col:  # extend downward through contiguous continuation lines
+        if 0 <= ln[1] - b <= 0.6 * lh:
+            x0, x1, b = min(x0, ln[0]), max(x1, ln[2]), max(b, ln[3])
+    return (x0, t, x1, b)
+
+
+def _figure_for_caption(cap, clusters, lines, cap_exts, left, cw, ch):
     """Resolve one caption to a tight figure box (raw pdfplumber pts), PDFFigures-2.0-style.
 
     Returns ``(x0, top, x1, bottom)`` or ``None`` if the caption has no graphic region beside it
     (i.e. it's really an inline "see Fig. 3" reference, not a caption). Steps: pick the graphic
-    cluster directly above/below the caption and horizontally overlapping it; grow that box to
-    swallow nearby NON-prose labels (axis ticks, "F(x)", "output size") while stopping at body
-    prose, the caption itself, and — for single-column captions — the page centre gutter.
+    cluster directly above/below the caption and horizontally overlapping it (clusters are split
+    at caption lines upstream, so two stacked figures never share one); grow that box to swallow
+    nearby NON-prose labels (axis ticks, "F(x)", "output size") while stopping at body prose, the
+    caption itself, the nearest OTHER caption (so it can't climb into a neighbor's figure), and —
+    for single-column captions — the page-centre gutter.
     """
     cx0, ct, cx1, cb = cap[0], cap[1], cap[2], cap[3]
 
@@ -253,11 +276,27 @@ def _figure_for_caption(cap, clusters, lines, left, cw, ch):
     if best is None:
         return None  # no adjacent figure → this marker is an inline cross-reference, skip it
 
+    # Band bounded by OTHER captions (their FULL multi-line extents, so a neighbor's 2nd caption
+    # line can't leak into this figure), measured against the caption-free cluster. `cap_exts` are
+    # extents; the one covering this marker is our own caption — exclude it.
+    own = lambda e: e[1] <= ct + 1 and e[3] >= cb - 1 and min(cap[2], e[2]) - max(cap[0], e[0]) > 0
+    nbr_exts = [e for e in cap_exts if not own(e) and min(cap[2], e[2]) - max(cap[0], e[0]) > 0]
+    top_bar = max([e[3] for e in nbr_exts if e[3] <= best[1] + 1] or [-1e18])
+    bot_bar = min([e[1] for e in nbr_exts if e[1] >= best[3] - 1] or [1e18])
+    # A line belongs to a neighbor's caption block (its marker OR a continuation line) — never
+    # pull it in, even when it vertically overlaps this figure's cluster (page 5: Table 1's 2nd
+    # caption line "sampling is performed…" sits right on top of Figure 4's plots).
+    in_nbr_caption = lambda ln: any(
+        e[1] - 1 <= ln[1] and ln[3] <= e[3] + 1 and _hspan_overlap(e, ln) > 0.3 * max(1.0, ln[2] - ln[0])
+        for e in nbr_exts)
+
     x0, t, x1, b = best
-    for _ in range(4):  # iterate: a label pulled in may bring its neighbour within reach
+    for _ in range(4):  # iterate: a label pulled in may bring its neighbor within reach
         for ln in lines:
             if CAPTION_RE.match(ln[4]) or (ln[2] - ln[0]) > FIG_LABEL_MAXW * cw:
                 continue  # captions and full-width body prose are never part of the figure
+            if in_nbr_caption(ln) or ln[3] <= top_bar or ln[1] >= bot_bar:  # neighbor's territory
+                continue
             if ct >= b and ln[3] > ct:      # caption sits below the figure → don't cross it
                 continue
             if cb <= t and ln[1] < cb:      # caption above (tables) → don't cross it
@@ -271,6 +310,7 @@ def _figure_for_caption(cap, clusters, lines, left, cw, ch):
         b = min(b, ct)
     elif cb <= t + 1:
         t = max(t, cb)
+    t, b = max(t, top_bar), min(b, bot_bar)
 
     if (cx1 - cx0) <= 0.55 * cw:  # single-column caption → keep its figure on its own side
         center = left + cw / 2
@@ -279,6 +319,52 @@ def _figure_for_caption(cap, clusters, lines, left, cw, ch):
         else:
             x0 = max(x0, center - 0.02 * cw)
     return (x0, t, x1, b)
+
+
+def _split_cluster(cl, gboxes, caps, cw, ch):
+    """Split a graphic cluster wherever a caption line crosses it, refitting each piece to its
+    own graphics. Proximity clustering can merge two stacked figures separated only by a caption
+    (page 5: Table 1's grid + Figure 4's plots straddle Table 1's caption). Cutting at the
+    caption keeps each caption anchored to its OWN figure instead of both grabbing the blob.
+    """
+    cuts = sorted((c[1], c[3]) for c in caps
+                  if c[1] > cl[1] + 1 and c[3] < cl[3] - 1 and _hspan_overlap(cl, c) > 0.3 * (cl[2] - cl[0]))
+    if not cuts:
+        return [cl]
+    bands, prev = [], cl[1]
+    for a, z in cuts:
+        bands.append((prev, a)); prev = z
+    bands.append((prev, cl[3]))
+    out = []
+    for ya, yb in bands:
+        mem = [g for g in gboxes if g[1] < yb - 1 and g[3] > ya + 1 and g[2] >= cl[0] - 1 and g[0] <= cl[2] + 1]
+        if not mem:
+            continue
+        x0, x1 = min(g[0] for g in mem), max(g[2] for g in mem)
+        t, b = max(ya, min(g[1] for g in mem)), min(yb, max(g[3] for g in mem))
+        if (x1 - x0) * (b - t) > FIG_MIN_AREA * cw * ch:
+            out.append((x0, t, x1, b))
+    return out or [cl]
+
+
+def _iou(a, b):
+    ix0, iy0, ix1, iy1 = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _dedupe_figures(figs, thresh=0.6):
+    """Drop near-duplicate boxes — a safety net if two captions still resolve to one region."""
+    out = []
+    for label, box in figs:
+        dup = next((o for o in out if _iou(o[1], box) > thresh), None)
+        if dup is not None:
+            print(f"locate: '{label[:30]}…' overlaps '{dup[0][:30]}…' (IoU>{thresh}); dropped the "
+                  "later box — two captions resolved to one region.", file=sys.stderr)
+            continue
+        out.append((label, box))
+    return out
 
 
 def compute_figures(page):
@@ -302,12 +388,17 @@ def compute_figures(page):
                  for l in page.extract_text_lines()]
     except Exception:
         lines = []
+    caps = [l for l in lines if CAPTION_RE.match(l[4])]  # caption MARKER lines (anchor a figure)
+    cap_exts = [_caption_extent(c, lines) for c in caps]  # their full multi-line extents (barriers)
+    # Split any cluster a caption crosses, so two stacked figures don't share one merged blob.
+    gboxes = [(o["x0"], o["top"], o["x1"], o["bottom"]) for o in gobjs]
+    clusters = [s for cl in clusters for s in _split_cluster(cl, gboxes, caps, cw, ch)]
     out = []
-    for cap in (l for l in lines if CAPTION_RE.match(l[4])):
-        box = _figure_for_caption(cap, clusters, lines, left, cw, ch)
+    for cap in caps:
+        box = _figure_for_caption(cap, clusters, lines, cap_exts, left, cw, ch)
         if box is not None:
             out.append((cap[4][:60], mapfn(box[0], box[1], box[2], box[3])))
-    return out
+    return _dedupe_figures(out)
 
 
 def cmd_locate(args):

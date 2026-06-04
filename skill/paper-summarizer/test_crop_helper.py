@@ -18,15 +18,18 @@ import crop_helper  # noqa: E402
 import pdfplumber  # noqa: E402
 
 
-def _make_pdf(media, crop, rect, rotate=0, texts=None):
+def _make_pdf(media, crop, rect, rotate=0, texts=None, extra_rects=()):
     """Minimal one-page PDF with a filled rectangle (+ optional text). Coords in PDF pts.
 
     `texts` is a list of (x, y_baseline, string) in bottom-up PDF user space — used to plant a
-    caption line so the caption-stripping path can be exercised. Uses base-14 Helvetica (no font
-    embedding needed; license-clean).
+    caption line so the caption-stripping path can be exercised. `extra_rects` draws additional
+    filled rectangles (e.g. a second stacked figure). Uses base-14 Helvetica (no font embedding
+    needed; license-clean).
     """
     rx, ry, rw, rh = rect
     body = f"{rx} {ry} {rw} {rh} re f\n"
+    for ex, ey, ew, eh in extra_rects:
+        body += f"{ex} {ey} {ew} {eh} re f\n"
     for tx, ty, s in texts or []:
         esc = s.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
         body += f"BT /F1 10 Tf {tx} {ty} Td ({esc}) Tj ET\n"
@@ -221,6 +224,23 @@ class LocateTest(unittest.TestCase):
             texts=[(360, 660, "Figure 9 shows the result in more detail")],
         )
         self.assertEqual(figs, [])
+
+    def test_two_stacked_figures_sharing_a_merged_cluster_are_split(self):
+        # Two graphics 20pt apart merge into ONE proximity cluster; a caption sits in the gap.
+        # Without splitting the cluster at the caption, BOTH captions resolve to the same merged
+        # box (the page-5 Table 1 / Figure 4 bug). They must come back as two distinct boxes.
+        figs = self._figs(
+            media=(0, 0, 612, 792), crop=(0, 0, 612, 792),
+            rect=(100, 550, 200, 120),                  # figure A: top-left y 122..242
+            extra_rects=[(100, 410, 200, 120)],         # figure B: top-left y 262..382 (gap 20pt)
+            texts=[(100, 538, "Figure 1. Top one"),     # caption A in the gap (~y 247..254)
+                   (100, 394, "Figure 2. Bottom two")],  # caption B below figure B (~y 388..400)
+        )
+        self.assertEqual(len(figs), 2, figs)
+        a, b = sorted((box for _, box in figs), key=lambda x: x[1])
+        self.assertLess(crop_helper._iou(a, b), 0.3, f"boxes should be distinct: {a} {b}")
+        self.assertClose([a[1], a[3]], [0.154, 0.305])   # figure A ≈ its own rect
+        self.assertClose([b[1], b[3]], [0.331, 0.482])   # figure B ≈ its own rect
 
     def test_rotated_page_declines(self):
         figs = self._figs(
