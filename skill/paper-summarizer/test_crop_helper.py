@@ -176,6 +176,60 @@ class TightenTest(unittest.TestCase):
         self.assertEqual(kept, [100, 150, 500, 450])
 
 
+class LocateTest(unittest.TestCase):
+    """Caption-anchored figure detection (compute_figures) — the `locate` core."""
+
+    def assertClose(self, got, want, tol=0.04):
+        self.assertEqual(len(got), len(want))
+        for g, w in zip(got, want):
+            self.assertLessEqual(abs(g - w), tol, f"{got} != {want}")
+
+    def _figs(self, **kw):
+        page = pdfplumber.open(_make_pdf(**kw)).pages[0]
+        return crop_helper.compute_figures(page)
+
+    def test_caption_regex_tolerates_missing_space_and_anchors_at_line_start(self):
+        # The bug this fixes: pdfplumber drops the space → "Figure1", and `\b` used to reject it.
+        m = crop_helper.CAPTION_RE.match
+        for s in ["Figure1.Training error", "Fig. 4 shows", "Table3.Error rates", "  Figure 5. Deep"]:
+            self.assertTrue(m(s), f"should match: {s!r}")
+        for s in ["Figured results follow", "our experiments. Fig.1 shows", "a comfortable table 2"]:
+            self.assertFalse(m(s), f"should NOT match: {s!r}")
+
+    def test_locates_figure_excluding_its_caption_and_body_prose(self):
+        # Figure graphic in the left column (top-left px y 192..392), a no-space caption beneath
+        # it, and a wide body-prose line up top. The box must snap to the rect — caption below and
+        # body above both excluded.
+        figs = self._figs(
+            media=(0, 0, 612, 792), crop=(0, 0, 612, 792),
+            rect=(100, 400, 180, 200),
+            texts=[(100, 380, "Figure1.Atestfigurecaption"),
+                   (60, 720, "This is a wide body prose line spanning much of the column width here")],
+        )
+        self.assertEqual(len(figs), 1, figs)
+        _, box = figs[0]
+        self.assertClose(box, [0.163, 0.242, 0.458, 0.495])
+        self.assertLess(box[3], 0.50)      # caption (norm top ~0.51) excluded
+        self.assertGreater(box[1], 0.20)   # body line (norm ~0.09) excluded
+
+    def test_inline_reference_without_adjacent_graphics_is_dropped(self):
+        # "Figure 9 shows…" sits far from the only graphic (no horizontal overlap) → it's an inline
+        # cross-reference, not a caption, so compute_figures returns nothing.
+        figs = self._figs(
+            media=(0, 0, 612, 792), crop=(0, 0, 612, 792),
+            rect=(80, 400, 120, 150),
+            texts=[(360, 660, "Figure 9 shows the result in more detail")],
+        )
+        self.assertEqual(figs, [])
+
+    def test_rotated_page_declines(self):
+        figs = self._figs(
+            media=(0, 0, 612, 792), crop=(0, 0, 612, 792), rect=(100, 400, 180, 200), rotate=90,
+            texts=[(100, 380, "Figure1.Atest")],
+        )
+        self.assertEqual(figs, [])
+
+
 class NormalizeTest(unittest.TestCase):
     def test_order_and_clamp(self):
         # pixel box with reversed corners + out-of-range spill → ordered, clamped 0..1

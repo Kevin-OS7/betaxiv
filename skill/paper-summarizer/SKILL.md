@@ -86,57 +86,65 @@ PDF.js, with `/Rotate` applied) and slices the `bbox` rectangle out of it. So `b
 `[x0, y0, x1, y1]`, **normalized 0..1**, origin **top-left**, measured **against that same
 upright cropBox page**.
 
-**Do NOT eyeball coordinates.** Estimating pixel coordinates from a PDF you "read natively"
-is unreliable — you reconstruct the layout instead of grounding on the actual image, so boxes
-drift and swallow author blocks / captions / neighboring text. Instead, **ground each box on
-the exact page image the extension crops**, using the bundled helper `crop_helper.py`
-(needs `pdfplumber` — `pip install pdfplumber` if missing; Pillow ships with it).
+**Do NOT eyeball coordinates** — estimating pixels from a PDF you "read natively" drifts and
+swallows captions, author blocks, and neighboring columns. Use the bundled helper
+`crop_helper.py` (needs `pdfplumber` — `pip install pdfplumber` if missing; Pillow ships with
+it). It sits **next to this `SKILL.md`**; your cwd is usually the workspace root, so call it by
+its full path — set `HELPER` to this skill dir's `crop_helper.py` (the directory this
+`SKILL.md` was loaded from, e.g. `.claude/skills/paper-summarizer/crop_helper.py` or
+`.agents/skills/paper-summarizer/crop_helper.py`), then use `python3 "$HELPER" …` below.
 
-`crop_helper.py` sits **next to this `SKILL.md`**. Your cwd is usually the workspace root, not
-the skill dir, so **call it by its full path** — set `HELPER` to the `crop_helper.py` in this
-skill's own directory (the directory this `SKILL.md` was loaded from, e.g.
-`.claude/skills/paper-summarizer/crop_helper.py` or `.agents/skills/paper-summarizer/crop_helper.py`),
-then use `python3 "$HELPER" …` in every call below. For each figure:
+### Primary: `locate` (caption-anchored, automatic)
 
-**You do not need pixel-perfect edges — give a loose box, let `tighten` snap it.** Don't fuss
-over exact margins or where the caption ends. Draw a **generous** box that fully contains the
-figure, then run `tighten`: it auto-removes the caption line and trims the whitespace down to
-the real ink, so your box just has to surround the **right figure** without bleeding into a
-neighboring figure/column. For each figure:
+For most papers you don't place boxes at all — `locate` finds them. It detects each **caption**
+("Figure N" / "Table N") on a page and returns a **tight** box around that figure or table,
+excluding the caption, the page title/authors, and adjacent text columns (a port of Allen AI's
+pdffigures2 algorithm — pure pdfplumber geometry, no rendering, no ML):
 
-1. **Render the page** in the extension's frame:
+```bash
+python3 "$HELPER" locate <pdf> --page N --out /tmp/pN.png --crop-prefix /tmp/figN_
+```
+
+It prints one line per detected figure — `<idx>⇥[x0,y0,x1,y1]⇥<caption text>` — draws every box
+on `/tmp/pN.png`, and writes each crop to `/tmp/figN_<idx>.png`. Then:
+
+1. **Read `/tmp/pN.png`** (all boxes drawn) to see what was found, plus the per-figure crops to
+   confirm each is tight and complete.
+2. **Map each box to a figure** by its printed caption text, and store that `[x0,y0,x1,y1]`
+   **verbatim** as the figure's `bbox`. (You still author `label`, `caption`, `page` yourself.)
+
+Run `locate` once per page that has figures/tables. It handles vector figures, text-labeled
+schematics, and tables. It returns nothing on rotated pages or where no caption is detectable —
+use the fallback there.
+
+### Fallback: render + loose box + `tighten`
+
+When `locate` misses a figure (no caption text, a scanned/rotated page, or a box that came out
+wrong), place it yourself — you still don't need pixel-perfect edges:
+
+1. **Render** the page in the extension's frame:
    ```bash
    python3 "$HELPER" render <pdf> --page N --out /tmp/pageN.png   # prints "W H" (px)
    ```
-2. **Read `/tmp/pageN.png`** and find the figure on *that* image — match it to its caption
-   number so you box the **right one** (don't grab the title, an author block, or the wrong
-   figure). Return a **generous** box around it in **pixel coordinates on the PNG**, origin
-   top-left. Err big: include surrounding whitespace and even the caption — `tighten` strips
-   those. Only hard rule: don't let the box spill into a *different* figure, table, or text
-   column.
-3. **Tighten + self-verify** — auto-strip the caption, trim margins, and emit the final bbox:
+2. **Read it** and draw a **generous** pixel box around the right figure (include surrounding
+   whitespace and even the caption — `tighten` strips them). Only rule: don't spill into a
+   *different* figure or text column.
+3. **Tighten + verify:**
    ```bash
    python3 "$HELPER" tighten <pdf> --page N --pixels X0 Y0 X1 Y1 \
        --out /tmp/overlay.png --crop /tmp/crop.png   # prints the [x0,y0,x1,y1] to store
    ```
-   `tighten` prints the normalized `bbox` (use it verbatim) and writes `/tmp/crop.png`.
-   **Read `/tmp/crop.png`:** it must be the whole figure, centred, snug, **caption excluded**
-   (you already restate the caption as text, so it must not appear in the image). If it clips
-   the figure, widen the input box and rerun; if it still grabbed the wrong region, re-find it
-   on the page (step 2). After ≤2 tries you can't get a clean crop, set `bbox` to `null` — the
-   extension then shows just the caption and page.
+   Read `/tmp/crop.png`: whole figure, snug, caption excluded. If it clips, widen and rerun;
+   after ≤2 tries you can't get it clean, set `bbox` to `null` (extension shows caption + page).
 
 Notes:
-- `tighten` also accepts `--bbox X0 Y0 X1 Y1` (normalized) instead of `--pixels`, and `--pad P`
-  to change the breathing room (default 6px). On rotated pages it still trims whitespace
-  (pixel-based); caption stripping is skipped there but the caption is usually outside a tight
-  ink box anyway.
-- `page` is the 1-based page the figure appears on.
-- Optional seed: `python3 "$HELPER" candidates <pdf> --page N` prints pdfplumber-derived boxes
-  (exact for embedded images; clustered for vector figures/tables). Feed one straight into
-  `tighten` as the loose box. (Prints nothing on rotated pages — just ground via `render`.)
-- `preview` / `normalize` remain available if you want to place a box by hand without the
-  auto-trim, but `tighten` is the default and handles the margin/centre/caption issues for you.
+- `tighten` accepts `--bbox` (normalized) or `--pixels`, and `--pad P` (default 6px). On rotated
+  pages it trims whitespace (pixel-based) but skips caption stripping.
+- `candidates <pdf> --page N` prints raw pdfplumber graphic clusters — a low-level seed for
+  `tighten`; `locate` supersedes it for normal use. `preview` / `normalize` place or normalize
+  a box by hand without auto-trim.
+- `page` is the 1-based page the figure appears on. Set `bbox` to `null` if you truly can't
+  locate a figure — the extension then shows just the caption and page.
 
 Reference each figure once from a section via a `{ "type": "figure", "label": … }` block so
 it renders in context. (Any figure you list but never reference still appears in a trailing

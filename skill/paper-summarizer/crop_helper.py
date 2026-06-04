@@ -28,16 +28,25 @@ import sys
 
 DEFAULT_DPI = 150
 
-# A figure/table CAPTION starts with one of these markers + a number. We strip the caption
-# from the box because the summary already restates it as text below the image — keeping it
-# in the crop just wastes vertical space and looks like a duplicate title. In-figure labels
-# (axis ticks, "weight layer", "relu", legends) never match this, so they're preserved.
+# A figure/table CAPTION starts with one of these markers + a number. This anchors the whole
+# `locate` flow (the caption tells us WHERE a figure is) and lets `tighten` strip the caption
+# line. NOTE: no `\b` after the marker — pdfplumber often drops the space, emitting "Figure1"
+# (e' and '1' are both word chars, so `\b` would FAIL to match). We tolerate "Figure1",
+# "Fig.4", "Table3" alike. In-figure labels ("weight layer", "relu", axis ticks) never match.
 CAPTION_RE = re.compile(
-    r"^\s*(figure|fig|table|tab|algorithm|alg|scheme|chart|exhibit|図|表)\b\.?\s*\d+",
+    r"^\s*(?:figure|fig|table|tab|algorithm|alg|scheme|chart|exhibit|図|表)\.?\s*\d+",
     re.IGNORECASE,
 )
 # Pixels brighter than this (0..255 luma) count as background when trimming whitespace.
 INK_THRESH = 245
+
+# Caption-anchored region detection (`locate`), PDFFigures-2.0-style, tuned on arXiv 2-col PDFs.
+# All fractions are of the cropBox width (cw) or height (ch).
+FIG_CLUSTER_GAP = 0.03   # merge graphic primitives whose gap is <= this fraction of ch into one figure
+FIG_MIN_AREA = 0.004     # drop graphic clusters smaller than this fraction of the page (rules, specks)
+FIG_MAX_CAP_GAP = 0.18   # a caption's figure cluster must sit within this (×ch) above/below it
+FIG_LABEL_MAXW = 0.45    # text lines wider than this (×cw) are body prose, never pulled into a figure
+FIG_LABEL_GAP = 0.02     # grow the region to in-figure labels within this gap (×cw / ×ch)
 
 
 def _load_page(pdf_path, page_no):
@@ -218,6 +227,121 @@ def cmd_candidates(args):
     pdf.close()
 
 
+def _hspan_overlap(a, b):
+    """Horizontal overlap (pts) of two (x0, top, x1, bottom) boxes."""
+    return max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+
+
+def _figure_for_caption(cap, clusters, lines, left, cw, ch):
+    """Resolve one caption to a tight figure box (raw pdfplumber pts), PDFFigures-2.0-style.
+
+    Returns ``(x0, top, x1, bottom)`` or ``None`` if the caption has no graphic region beside it
+    (i.e. it's really an inline "see Fig. 3" reference, not a caption). Steps: pick the graphic
+    cluster directly above/below the caption and horizontally overlapping it; grow that box to
+    swallow nearby NON-prose labels (axis ticks, "F(x)", "output size") while stopping at body
+    prose, the caption itself, and — for single-column captions — the page centre gutter.
+    """
+    cx0, ct, cx1, cb = cap[0], cap[1], cap[2], cap[3]
+
+    best, best_d = None, 1e9
+    for cl in clusters:
+        if _hspan_overlap(cap, cl) < 0.2 * min(cap[2] - cap[0], cl[2] - cl[0]):
+            continue
+        d = (ct - cl[3]) if cl[3] <= ct else (cl[1] - cb) if cl[1] >= cb else 0.0
+        if d < best_d and d < FIG_MAX_CAP_GAP * ch:
+            best, best_d = cl, d
+    if best is None:
+        return None  # no adjacent figure → this marker is an inline cross-reference, skip it
+
+    x0, t, x1, b = best
+    for _ in range(4):  # iterate: a label pulled in may bring its neighbour within reach
+        for ln in lines:
+            if CAPTION_RE.match(ln[4]) or (ln[2] - ln[0]) > FIG_LABEL_MAXW * cw:
+                continue  # captions and full-width body prose are never part of the figure
+            if ct >= b and ln[3] > ct:      # caption sits below the figure → don't cross it
+                continue
+            if cb <= t and ln[1] < cb:      # caption above (tables) → don't cross it
+                continue
+            if (ln[0] <= x1 + FIG_LABEL_GAP * cw and ln[2] >= x0 - FIG_LABEL_GAP * cw
+                    and ln[1] <= b + FIG_LABEL_GAP * ch and ln[3] >= t - FIG_LABEL_GAP * ch):
+                x0, t = min(x0, ln[0]), min(t, ln[1])
+                x1, b = max(x1, ln[2]), max(b, ln[3])
+
+    if ct >= b - 1:      # exclude the caption band itself
+        b = min(b, ct)
+    elif cb <= t + 1:
+        t = max(t, cb)
+
+    if (cx1 - cx0) <= 0.55 * cw:  # single-column caption → keep its figure on its own side
+        center = left + cw / 2
+        if (cx0 + cx1) / 2 < center:
+            x1 = min(x1, center + 0.02 * cw)
+        else:
+            x0 = max(x0, center - 0.02 * cw)
+    return (x0, t, x1, b)
+
+
+def compute_figures(page):
+    """Caption-anchored figure/table regions on a page — the deterministic core of `locate`.
+
+    Returns ``[(caption_text, [x0,y0,x1,y1]), ...]`` with cropBox-normalized boxes (0..1,
+    top-left), one per real caption. Pure pdfplumber geometry — no rendering, no ML, no torch.
+    Returns ``[]`` on rotated pages (object coords don't map onto the upright render frame — same
+    limitation as `candidates`); the caller falls back to `render` + VLM box + `tighten` there.
+    """
+    if int(page.rotation or 0) % 360 != 0:
+        return []
+    cb = [float(v) for v in (page.cropbox or page.bbox)]
+    left, cw, ch = cb[0], cb[2] - cb[0], cb[3] - cb[1]
+    mapfn, _, _ = _cropbox_map(page)
+    gobjs = list(page.rects) + list(page.lines) + list(page.curves) + list(page.images)
+    clusters = [c for c in _cluster(gobjs, FIG_CLUSTER_GAP * ch)
+                if (c[2] - c[0]) * (c[3] - c[1]) > FIG_MIN_AREA * cw * ch]
+    try:
+        lines = [(l["x0"], l["top"], l["x1"], l["bottom"], l.get("text", "") or "")
+                 for l in page.extract_text_lines()]
+    except Exception:
+        lines = []
+    out = []
+    for cap in (l for l in lines if CAPTION_RE.match(l[4])):
+        box = _figure_for_caption(cap, clusters, lines, left, cw, ch)
+        if box is not None:
+            out.append((cap[4][:60], mapfn(box[0], box[1], box[2], box[3])))
+    return out
+
+
+def cmd_locate(args):
+    pdf, page = _load_page(args.pdf, args.page)
+    figs = compute_figures(page)
+    if not figs:
+        print(
+            "locate: no caption-anchored figures on this page (rotated page, or no detectable "
+            "caption). Fall back to `render` + read the page + a loose box + `tighten`.",
+            file=sys.stderr,
+        )
+    for i, (label, box) in enumerate(figs):
+        print(f"{i}\t{box}\t{label}")
+
+    if (args.out or args.crop_prefix) and figs:
+        from PIL import ImageDraw
+        img = _render_pil(page, args.dpi)
+        w, h = img.size
+        overlay = img.copy()
+        draw = ImageDraw.Draw(overlay)
+        lw = max(2, round(min(w, h) / 300))
+        for i, (label, box) in enumerate(figs):
+            px = [box[0] * w, box[1] * h, box[2] * w, box[3] * h]
+            draw.rectangle(px, outline=(220, 30, 30), width=lw)
+            if args.crop_prefix:
+                outp = f"{args.crop_prefix}{i}.png"
+                img.crop((int(px[0]), int(px[1]), int(px[2]), int(px[3]))).save(outp)
+                print(f"saved crop {outp}", file=sys.stderr)
+        if args.out:
+            overlay.save(args.out)
+            print(f"saved overlay {args.out} ({len(figs)} box(es))", file=sys.stderr)
+    pdf.close()
+
+
 def _content_bbox(img, box):
     """Tight pixel bbox of the ink inside `box` (whitespace trimmed). None if all background.
 
@@ -383,6 +507,17 @@ def main():
     gt.add_argument("--pixels", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"), help="loose box, pixels on the PNG")
     gt.add_argument("--bbox", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"), help="loose box, normalized 0..1")
     t.set_defaults(func=cmd_tighten)
+
+    lo = sub.add_parser(
+        "locate",
+        help="PRIMARY: caption-anchored figure/table boxes on a page (prints 'idx <bbox> caption')",
+    )
+    lo.add_argument("pdf")
+    lo.add_argument("--page", type=int, required=True)
+    lo.add_argument("--out", help="optional overlay PNG with every detected box drawn")
+    lo.add_argument("--crop-prefix", help="optional: write each crop to <prefix><idx>.png to self-verify")
+    lo.add_argument("--dpi", type=int, default=DEFAULT_DPI)
+    lo.set_defaults(func=cmd_locate)
 
     c = sub.add_parser("candidates", help="ASSIST: print pdfplumber-derived seed boxes (normalized)")
     c.add_argument("pdf")
