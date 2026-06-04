@@ -481,6 +481,37 @@ figure.fig figcaption {
   /* Scroll horizontally when a zoomed-in figure grows past the column width. */
   overflow-x: auto;
   text-align: center;
+  cursor: zoom-in; /* hint that clicking enters per-figure zoom */
+}
+
+/* A figure the user clicked to focus (Ctrl/Cmd+scroll over it then scales only it). */
+figure.fig.fig-active {
+  outline: 2px solid var(--vscode-focusBorder, #3794ff);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* Per-figure zoom slider. */
+.fig-zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.fig-zoom-slider {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  accent-color: var(--vscode-focusBorder, #3794ff);
+}
+
+.fig-zoom-pct {
+  font-size: 0.8em;
+  color: var(--vscode-descriptionForeground);
+  min-width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .fig-image {
@@ -490,7 +521,7 @@ figure.fig figcaption {
      one; --summary-zoom then scales it so figures grow/shrink in lockstep with the text — and
      only a zoomed-in figure exceeds the column. `margin:auto` centers when it fits and
      left-aligns (fully scrollable) when it overflows. */
-  width: calc(min(var(--fig-w, 100%), 100%) * var(--summary-zoom, 1));
+  width: calc(min(var(--fig-w, 100%), 100%) * var(--summary-zoom, 1) * var(--fig-zoom, 1));
   max-width: none;
   height: auto;
   display: block;

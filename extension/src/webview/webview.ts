@@ -58,6 +58,7 @@ interface SavedState {
   summaryOpen?: boolean;
   splitCols?: string;
   summaryZoom?: number;
+  figZoom?: Record<string, number>; // per-figure zoom, keyed by figure label
 }
 function saveState(patch: Partial<SavedState>): void {
   const cur = (vscode.getState() as SavedState) ?? {};
@@ -152,15 +153,79 @@ document
 document
   .getElementById("summary-zoom-reset")
   ?.addEventListener("click", () => applySummaryZoom(1));
+// --- Per-figure zoom --------------------------------------------------------
+// Each figure carries its OWN persistent zoom. A slider on the figure sets it directly; and
+// after clicking the figure to focus it, Ctrl/Cmd+scroll over it nudges the same value. The
+// click gate keeps the summary zoom from silently switching to figure zoom when the pointer
+// merely drifts over a figure. The zoom is saved per figure label, so clicking away only drops
+// the focus outline (never the size) and it survives a summary live-reload.
+let activeFigure: HTMLElement | null = null;
+const FIG_MIN_ZOOM = 0.5;
+const FIG_MAX_ZOOM = 5;
+
+function clampFigZoom(z: number): number {
+  return Math.max(FIG_MIN_ZOOM, Math.min(FIG_MAX_ZOOM, z));
+}
+
+function getFigZoom(label: string): number {
+  const z = ((vscode.getState() as SavedState) ?? {}).figZoom?.[label];
+  return typeof z === "number" ? clampFigZoom(z) : 1;
+}
+
+function saveFigZoom(label: string, z: number): void {
+  const cur = (vscode.getState() as SavedState) ?? {};
+  saveState({ figZoom: { ...(cur.figZoom ?? {}), [label]: z } });
+}
+
+// Apply a zoom to a figure: set the CSS var, persist it (by label), and sync its slider + %.
+function setFigureZoom(figure: HTMLElement, z: number): void {
+  const zoom = clampFigZoom(z);
+  figure.style.setProperty("--fig-zoom", String(zoom));
+  if (figure.dataset.figLabel) saveFigZoom(figure.dataset.figLabel, zoom);
+  const slider = figure.querySelector<HTMLInputElement>(".fig-zoom-slider");
+  if (slider) slider.value = String(zoom);
+  const pct = figure.querySelector<HTMLElement>(".fig-zoom-pct");
+  if (pct) pct.textContent = `${Math.round(zoom * 100)}%`;
+}
+
+function setActiveFigure(fig: HTMLElement | null): void {
+  if (activeFigure === fig) return;
+  activeFigure?.classList.remove("fig-active");
+  activeFigure = fig;
+  activeFigure?.classList.add("fig-active");
+}
+
+function toggleActiveFigure(fig: HTMLElement): void {
+  setActiveFigure(activeFigure === fig ? null : fig);
+}
+
+function activeFigureUnder(target: EventTarget | null): HTMLElement | null {
+  if (!activeFigure) return null;
+  const node = target instanceof Element ? target : null;
+  return node?.closest(".fig") === activeFigure ? activeFigure : null;
+}
+
 summaryPane.addEventListener(
   "wheel",
   (e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
-    applySummaryZoom(summaryZoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    const fig = activeFigureUnder(e.target);
+    if (fig) {
+      setFigureZoom(fig, (parseFloat(fig.style.getPropertyValue("--fig-zoom")) || 1) * factor);
+    } else {
+      applySummaryZoom(summaryZoom * factor);
+    }
   },
   { passive: false }
 );
+
+// Clicking outside any figure only drops the focus outline; the figure keeps its zoom.
+summaryPane.addEventListener("click", (e) => {
+  const onFigure = e.target instanceof Element && e.target.closest(".fig");
+  if (!onFigure) setActiveFigure(null);
+});
 
 // Top-right notice so the user knows a summary is missing/invalid even while collapsed.
 type SummaryStatus = "ready" | "missing" | "invalid";
@@ -695,10 +760,31 @@ async function renderFigureImage(fig: Figure, target: HTMLElement): Promise<void
 function renderFigure(fig: Figure): HTMLElement {
   const figure = el("figure", "fig");
   if (fig.bbox && fig.page) {
+    figure.dataset.figLabel = fig.label;
+    const initialZoom = getFigZoom(fig.label); // restore a saved per-figure zoom
+    figure.style.setProperty("--fig-zoom", String(initialZoom));
+
     const holder = el("div", "fig-image-holder");
+    holder.title = "Click to focus, then Ctrl/Cmd + scroll — or drag the slider — to zoom";
+    holder.addEventListener("click", () => toggleActiveFigure(figure));
     holder.appendChild(el("div", "figure-loading", "Rendering figure…"));
     figure.appendChild(holder);
     void withFigSlot(() => renderFigureImage(fig, holder));
+
+    // Per-figure zoom slider.
+    const bar = el("div", "fig-zoom-bar");
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "fig-zoom-slider";
+    slider.min = String(FIG_MIN_ZOOM);
+    slider.max = String(FIG_MAX_ZOOM);
+    slider.step = "0.05";
+    slider.value = String(initialZoom);
+    slider.setAttribute("aria-label", `Zoom ${fig.label}`);
+    slider.addEventListener("input", () => setFigureZoom(figure, parseFloat(slider.value) || 1));
+    bar.appendChild(slider);
+    bar.appendChild(el("span", "fig-zoom-pct", `${Math.round(initialZoom * 100)}%`));
+    figure.appendChild(bar);
   }
   const cap = document.createElement("figcaption");
   cap.appendChild(el("strong", undefined, fig.label));
@@ -757,6 +843,7 @@ function renderBlocks(
 }
 
 function renderSummary(s: PaperSummary): void {
+  setActiveFigure(null); // the figures are about to be rebuilt; drop any stale focus
   const root = document.createElement("div");
   const figuresByLabel = new Map(s.summary.figures.map((f) => [f.label, f]));
 
