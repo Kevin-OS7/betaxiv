@@ -113,6 +113,11 @@ body {
 #pdf-pane {
   height: 100vh;
   overflow: auto;
+  /* Always reserve the vertical scrollbar gutter. Without this, the scrollbar appears only
+     once the pages make the document overflow, shrinking the content width AFTER the first
+     page rendered at the wider, scrollbar-less width — that width jump triggers a relayout that
+     re-rasterizes page 1, which is the "page 1 flashes then vanishes on open" symptom. */
+  scrollbar-gutter: stable;
   background: var(--vscode-editorWidget-background, #1e1e1e);
   padding: 12px 8px;
 }
@@ -221,6 +226,30 @@ body {
 
 #sel-toolbar[hidden] {
   display: none;
+}
+
+/* Minimal floating chip for copying summary/AIDoc selections with their file path. */
+#doc-copy-toolbar {
+  position: fixed;
+  z-index: 30;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.4));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+#doc-copy-toolbar[hidden] {
+  display: none;
+}
+
+/* Math-style superscript "p" (= path) in the "Copy^p" button label. */
+.copy-sup {
+  font-size: 0.7em;
+  font-style: italic;
+  vertical-align: super;
+  line-height: 0;
+  margin-left: 1px;
 }
 
 .swatch {

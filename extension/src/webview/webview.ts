@@ -128,6 +128,10 @@ let docsState: PaperDoc[] = [];
 let docsInvalidState: { relPath: string; errors: string[] }[] = [];
 let docsSkillName = "betaxiv-documenter";
 let selection: Selection = { kind: "summary" };
+// Workspace-relative file paths of the right-pane artifacts, used as the provenance prefix when
+// copying selected summary/AIDoc text ("copy with path"): the summary JSON, and each doc by id.
+let summaryRelPathReady = "";
+let docRelPaths: Record<string, string> = {};
 // Workspace-relative path of the open PDF (from bootstrap) — used as copy provenance and to
 // name the PDF in copied prompts. Falls back to the filename if no workspace-relative path.
 let openedPdfRelPath = "";
@@ -148,6 +152,7 @@ window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
       break;
     case "summary":
       summaryState = { kind: "ready", summary: msg.summary };
+      summaryRelPathReady = msg.summaryRelPath;
       refreshAidocs();
       break;
     case "summary-missing":
@@ -160,6 +165,7 @@ window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
       break;
     case "docs":
       docsState = msg.docs;
+      docRelPaths = msg.docRelPaths;
       docsInvalidState = msg.invalid;
       docsSkillName = msg.docsSkillName;
       refreshAidocs();
@@ -436,6 +442,12 @@ async function renderPdf(
 
     const MAX_RENDERED = 8; // soft cap on simultaneously rasterized pages
     const rendered: Slot[] = [];
+    // Bumped by rescaleAll. An in-flight render captures it before awaiting; if it changes
+    // mid-rasterize (a zoom/relayout dropped every canvas, including this one) the finished
+    // canvas is stale and detached, so we discard it and re-render at the current scale instead
+    // of leaving the slot blank. Without this, a relayout that fires while page 1 is still
+    // rasterizing on open leaves page 1 blank until a scroll re-triggers it.
+    let renderEpoch = 0;
 
     const releaseFarthest = (keep: Slot) => {
       while (rendered.length > MAX_RENDERED) {
@@ -468,6 +480,7 @@ async function renderPdf(
     const renderSlot = async (slot: Slot) => {
       if (slot.canvas || slot.rendering) return;
       slot.rendering = true;
+      const epoch = renderEpoch;
       try {
         // Lazily fetch the page (all but page 1) and derive its real viewport, then
         // correct the placeholder size in case this page differs from the page-1 estimate.
@@ -491,6 +504,15 @@ async function renderPdf(
           viewport: slot.viewport,
           transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
         }).promise;
+        if (epoch !== renderEpoch) {
+          // A rescale (zoom/relayout) ran while we were rasterizing: this canvas is sized to a
+          // now-stale scale and rescaleAll has already detached it. Drop it and re-render the
+          // currently-visible slots at the new scale once `rendering` clears (in finally).
+          canvas.remove();
+          if (slot.canvas === canvas) slot.canvas = undefined;
+          setTimeout(renderVisible, 0);
+          return;
+        }
         rendered.push(slot);
         releaseFarthest(slot);
 
@@ -569,6 +591,7 @@ async function renderPdf(
     // recompute viewports (loaded pages) or reset to the new placeholder estimate
     // (not-yet-loaded pages).
     const rescaleAll = () => {
+      renderEpoch++; // invalidate any in-flight render: its canvas is about to be detached
       const est = estDims();
       for (const slot of slots) {
         slot.canvas?.remove();
@@ -1916,11 +1939,12 @@ selNoteBtn.textContent = "Note";
 selNoteBtn.title = "Highlight and add a note";
 selNoteBtn.addEventListener("click", addNoteFromSelection);
 selToolbar.appendChild(selNoteBtn);
-// "Copy ⧉": copy the selection WITH its file path ("<relpath>\n<text>") for pasting as a quote
-// with provenance. Plain Ctrl/Cmd+C stays path-free.
+// "Copy^p": copy the selection WITH its file path ("<relpath>\n<text>") for pasting as a quote
+// with provenance — the superscript "p" reads as "copy, with path". Plain Ctrl/Cmd+C stays
+// path-free.
 const selCopyBtn = document.createElement("button");
 selCopyBtn.className = "sel-copy-btn";
-selCopyBtn.textContent = "Copy ⧉";
+selCopyBtn.append(...copyWithPathLabel());
 selCopyBtn.title = "Copy selection with file path";
 selCopyBtn.addEventListener("click", copySelectionWithPath);
 selToolbar.appendChild(selCopyBtn);
@@ -2005,6 +2029,87 @@ function copySelectionWithPath(): void {
   );
   window.getSelection()?.removeAllRanges();
   hideSelToolbar();
+}
+
+// Label nodes for a copy-with-path button: the word "Copy" plus a math-style superscript "p"
+// (p = path). Returned as nodes so the <sup> renders as real superscript, not literal "^p".
+function copyWithPathLabel(): Node[] {
+  const sup = document.createElement("sup");
+  sup.className = "copy-sup";
+  sup.textContent = "p";
+  return [document.createTextNode("Copy"), sup];
+}
+
+// --- Summary/AIDoc pane: copy-with-path -------------------------------------
+// The PDF toolbar above is page-anchored (highlight/note need page rects). The right pane has no
+// such anchors, so it gets its own minimal floating button: select text in the summary or an
+// AIDoc and a "Copy^p" chip appears, copying "<artifact file path>\n<text>" for provenance.
+const docCopyToolbar = document.createElement("div");
+docCopyToolbar.id = "doc-copy-toolbar";
+docCopyToolbar.hidden = true;
+const docCopyBtn = document.createElement("button");
+docCopyBtn.className = "sel-copy-btn";
+docCopyBtn.append(...copyWithPathLabel());
+docCopyBtn.title = "Copy selection with file path";
+docCopyBtn.addEventListener("click", copyDocSelectionWithPath);
+docCopyToolbar.appendChild(docCopyBtn);
+// Pressing the button must not collapse the selection before the click lands.
+docCopyToolbar.addEventListener("mousedown", (e) => e.preventDefault());
+document.body.appendChild(docCopyToolbar);
+
+// The workspace-relative file path of the artifact currently rendered in the right pane, or ""
+// if none has one (e.g. the missing/waiting guidance). Used as the copy provenance prefix.
+function currentArtifactRelPath(): string {
+  if (selection.kind === "doc") return docRelPaths[selection.id] ?? "";
+  if (selection.kind === "invalid") return selection.relPath;
+  if (summaryState.kind === "ready") return summaryRelPathReady;
+  return "";
+}
+
+// True when the live selection is non-empty and lives inside the summary/AIDoc pane.
+function selectionInSummaryPane(): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+  if (!sel.toString().trim()) return false;
+  const node = sel.getRangeAt(0).startContainer;
+  const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
+  return !!el && summaryRoot.contains(el);
+}
+
+function showDocCopyToolbar(): void {
+  const sel = window.getSelection();
+  const rects = sel && sel.rangeCount ? sel.getRangeAt(0).getClientRects() : null;
+  const last = rects && rects.length ? rects[rects.length - 1] : null;
+  docCopyToolbar.hidden = false; // unhide before measuring
+  const tb = docCopyToolbar.getBoundingClientRect();
+  const anchorX = last ? last.right : window.innerWidth / 2;
+  const left = Math.max(6, Math.min(window.innerWidth - tb.width - 6, anchorX - tb.width));
+  let top = (last ? last.bottom : window.innerHeight / 2) + 6;
+  if (top + tb.height > window.innerHeight - 6) top = (last ? last.top : 0) - tb.height - 6;
+  docCopyToolbar.style.left = `${left}px`;
+  docCopyToolbar.style.top = `${Math.max(6, top)}px`;
+}
+function hideDocCopyToolbar(): void {
+  docCopyToolbar.hidden = true;
+}
+
+// Copy the summary/AIDoc selection prefixed with the artifact's file path: "<relpath>\n<text>".
+function copyDocSelectionWithPath(): void {
+  const text = window.getSelection()?.toString() ?? "";
+  if (!text.trim()) return;
+  const prefix = currentArtifactRelPath().trim();
+  const payload = prefix ? `${prefix}\n${text}` : text;
+  const clip = navigator.clipboard;
+  if (!clip) {
+    showToast("Clipboard unavailable.");
+    return;
+  }
+  void clip.writeText(payload).then(
+    () => showToast(prefix ? "Copied with file path." : "Copied."),
+    () => showToast("Could not copy to clipboard.")
+  );
+  window.getSelection()?.removeAllRanges();
+  hideDocCopyToolbar();
 }
 
 // Note popover: view/edit a highlight's note, recolor, or delete it.
@@ -2105,20 +2210,26 @@ function closeNotePopover(): void {
 // mouseup if a selection was made; a highlight click re-opens the popover on mouseup).
 document.addEventListener("mousedown", (e) => {
   const t = e.target as Node;
-  if (selToolbar.contains(t) || popover.contains(t)) return;
+  if (selToolbar.contains(t) || popover.contains(t) || docCopyToolbar.contains(t)) return;
   hideSelToolbar();
+  hideDocCopyToolbar();
   closeNotePopover();
 });
 
 document.addEventListener("mouseup", (e) => {
   const t = e.target as Node;
-  if (selToolbar.contains(t) || popover.contains(t)) return;
+  if (selToolbar.contains(t) || popover.contains(t) || docCopyToolbar.contains(t)) return;
   // Let the browser finalize the selection before we read it.
   setTimeout(() => {
     const anchor = computeSelectionAnchor();
     if (anchor) {
       currentSelectionAnchor = anchor;
       showSelToolbar();
+      return;
+    }
+    // A selection in the summary/AIDoc pane gets the copy-with-path chip instead.
+    if (selectionInSummaryPane()) {
+      showDocCopyToolbar();
       return;
     }
     // No selection → treat as a click: open a highlight's note if one was hit.
@@ -2131,15 +2242,19 @@ document.addEventListener("mouseup", (e) => {
   }, 0);
 });
 
-// Clearing the selection (collapsed) hides the toolbar.
+// Clearing the selection (collapsed) hides both toolbars.
 document.addEventListener("selectionchange", () => {
   const sel = window.getSelection();
-  if (!sel || sel.isCollapsed) hideSelToolbar();
+  if (!sel || sel.isCollapsed) {
+    hideSelToolbar();
+    hideDocCopyToolbar();
+  }
 });
 
 // Toolbar positions are viewport-fixed, so a scroll invalidates them — drop it (the popover
 // is a modal editor and stays open).
 pdfPane.addEventListener("scroll", hideSelToolbar);
+summaryPane.addEventListener("scroll", hideDocCopyToolbar);
 
 // Reflow copied PDF text (join wrapped lines within a paragraph, break at paragraph ends),
 // overriding PDF.js's line-by-line copy. Installed once; it only acts on PDF text selections.

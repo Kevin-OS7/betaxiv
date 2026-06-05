@@ -132,7 +132,7 @@
             "type": { "const": "diagram" },
             "mermaid": {
               "type": "string",
-              "description": "Mermaid diagram source, rendered to SVG client-side. Use ONLY built-in diagram types so nothing is lazily fetched under CSP: flowchart/graph, sequenceDiagram, classDiagram, stateDiagram, erDiagram, pie, xychart-beta. Use xychart-beta for BAR and simple line charts; for SCATTER plots, log axes, or error bars use a `chart` block instead. e.g. 'flowchart LR\\n  A[Input] --> B[Encoder] --> C[Decoder] --> D[Output]'."
+              "description": "Mermaid diagram source, rendered to SVG client-side. Use ONLY built-in diagram types so nothing is lazily fetched under CSP: flowchart/graph, sequenceDiagram, classDiagram, stateDiagram, erDiagram, pie, xychart-beta. Use xychart-beta for BAR and simple line charts; for SCATTER plots, log axes, or error bars use a `chart` block instead. Do NOT put HTML tags (e.g. <b>, <br>, <i>) in node labels — the renderer uses htmlLabels:false + securityLevel:strict, so tags are NOT formatted and show up as literal text. Keep labels plain text. e.g. 'flowchart LR\\n  A[Input] --> B[Encoder] --> C[Decoder] --> D[Output]'."
             },
             "caption": {
               "type": ["string", "null"],

@@ -219,7 +219,7 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
     }
     const result = validateSummaryBytes(bytes);
     if (result.valid && result.summary) {
-      post({ type: "summary", summary: result.summary });
+      post({ type: "summary", summary: result.summary, summaryRelPath });
       // Keep index.json human-readable: record the paper's title against its path. Fresh
       // read-modify-write so we don't clobber entries written since this panel opened.
       if (workspaceFolder && rel) {
@@ -233,7 +233,7 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
 
   const sendDocs = async () => {
     if (!docsDirUri) {
-      post({ type: "docs", docs: [], invalid: [], docsSkillName: DOCS_SKILL_NAME });
+      post({ type: "docs", docs: [], docRelPaths: {}, invalid: [], docsSkillName: DOCS_SKILL_NAME });
       return;
     }
     let entries: [string, vscode.FileType][] = [];
@@ -241,10 +241,12 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
       entries = await vscode.workspace.fs.readDirectory(docsDirUri);
     } catch {
       // Directory doesn't exist yet → no docs. The watcher picks up the first one written.
-      post({ type: "docs", docs: [], invalid: [], docsSkillName: DOCS_SKILL_NAME });
+      post({ type: "docs", docs: [], docRelPaths: {}, invalid: [], docsSkillName: DOCS_SKILL_NAME });
       return;
     }
     const docs: PaperDoc[] = [];
+    // doc id -> workspace-relative .doc.json path, for the "copy with path" provenance prefix.
+    const docRelPaths: Record<string, string> = {};
     const invalid: { relPath: string; errors: string[] }[] = [];
     // Stable, predictable order in the dropdown regardless of filesystem listing order.
     const files = entries
@@ -258,13 +260,15 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
           vscode.Uri.joinPath(docsDirUri, name)
         );
         const result = validateDocumentBytes(bytes);
-        if (result.valid && result.doc) docs.push(result.doc);
-        else invalid.push({ relPath: relPathStr, errors: result.errors });
+        if (result.valid && result.doc) {
+          docs.push(result.doc);
+          docRelPaths[result.doc.doc.id] = relPathStr;
+        } else invalid.push({ relPath: relPathStr, errors: result.errors });
       } catch (err) {
         invalid.push({ relPath: relPathStr, errors: [`Could not read: ${(err as Error).message}`] });
       }
     }
-    post({ type: "docs", docs, invalid, docsSkillName: DOCS_SKILL_NAME });
+    post({ type: "docs", docs, docRelPaths, invalid, docsSkillName: DOCS_SKILL_NAME });
   };
 
   // Delete an AIDoc file on explicit user action. Resolves the target either by relPath (must be

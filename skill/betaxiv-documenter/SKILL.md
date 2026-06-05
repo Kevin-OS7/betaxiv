@@ -128,6 +128,12 @@ offline and CSP-safe):
 Do **not** use third-party/experimental diagrams (mindmap-with-icons, architecture-beta,
 external integrations) — they require lazy chunk loading that the offline renderer blocks.
 
+**No HTML tags in labels.** The renderer uses `htmlLabels:false` + `securityLevel:strict`, so
+tags like `<b>`, `<br>`, `<i>` are **not** formatted — they leak through as literal `<b>…</b>`
+text in the diagram. Keep node labels plain text; if a label is too long, shorten it or split
+it across nodes rather than reaching for `<br>`. (This is deliberate hardening, not a bug — do
+not try to bold or line-break labels with HTML.)
+
 Examples (note the doubled-up `\n` inside JSON):
 ```json
 { "type": "diagram",

@@ -181,14 +181,19 @@ export type HostMessage =
       cMapUri: string;
       standardFontUri: string;
     }
-  | { type: "summary"; summary: PaperSummary }
+  // `summaryRelPath` is the workspace-relative path of the summary JSON, used as the provenance
+  // prefix when copying selected summary text ("copy with path").
+  | { type: "summary"; summary: PaperSummary; summaryRelPath: string }
   | { type: "summary-missing"; summaryRelPath: string; skillName: string }
   | { type: "summary-invalid"; summaryRelPath: string; errors: string[] }
   // The full set of validated AIDocs for this paper, rebuilt and re-sent on any change.
   // `invalid` carries docs that failed schema validation so the UI can surface them.
+  // `docRelPaths` maps each valid doc's id to its workspace-relative .doc.json path, used as the
+  // provenance prefix when copying selected AIDoc text ("copy with path").
   | {
       type: "docs";
       docs: PaperDoc[];
+      docRelPaths: Record<string, string>;
       invalid: { relPath: string; errors: string[] }[];
       docsSkillName: string;
     }
