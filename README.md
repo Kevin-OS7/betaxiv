@@ -23,11 +23,16 @@ papers/            Drop your PDFs here (git-ignored)
 papers/foo.pdf ──► your agent runs the betaxiv-summarizer skill
                           │  (reads the PDF, writes JSON)
                           ▼
-   .betaxiv/summaries/foo.summary.json   ◄── the versioned contract
-                          │  (validated by schema/summary.schema.v2.json)
+   .betaxiv/summaries/<id>.summary.json   ◄── the versioned contract
+                          │  <id> = first 16 hex of the PDF's SHA-256, so the
+                          │  summary + highlights follow the paper through any
+                          │  rename/move (validated by schema/summary.schema.v2.json)
                           ▼
    BetaXiv extension renders: PDF left, summary right (live-reloads on change)
 ```
+
+`.betaxiv/index.json` maps each PDF's path to its content id (a rebuildable cache, so a person
+browsing `.betaxiv/` can tell which `<id>` file is which paper).
 
 ## Build & run the extension
 
@@ -57,9 +62,9 @@ In the dev host:
 
 ## Smoke test (no agent needed)
 
-A ready-made fixture is included: [papers/sample.pdf](papers/sample.pdf) plus
-`.betaxiv/summaries/sample.summary.json` (a copy of the golden example). Open
-`papers/sample.pdf` with **BetaXiv: Open** and you should immediately see the PDF on
+A ready-made fixture is included: [papers/sample.pdf](papers/sample.pdf) plus its summary
+under `.betaxiv/summaries/` (a copy of the golden example, keyed by the PDF's content id).
+Open `papers/sample.pdf` with **BetaXiv: Open** and you should immediately see the PDF on
 the left and a structured summary on the right. Edit the summary JSON and the right pane
 live-updates; delete it and the right pane shows the "run the skill" guidance.
 
@@ -92,8 +97,8 @@ only writes files; it never launches an agent). From the repo you can also copy/
 `skill/betaxiv-summarizer/` directly.
 
 Then drop a PDF in `papers/` and ask your agent to run **betaxiv-summarizer** on it. It
-writes `.betaxiv/summaries/<basename>.summary.json`, and the open BetaXiv pane
-updates live.
+writes `.betaxiv/summaries/<id>.summary.json` (where `<id>` is the PDF's content id) and
+upserts `.betaxiv/index.json`, and the open BetaXiv pane updates live.
 
 ## Privacy & compliance
 

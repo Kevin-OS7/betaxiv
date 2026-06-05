@@ -100,6 +100,6 @@ export type WebviewMessage =
   | { type: "ready" }
   | { type: "error"; message: string }
   // The webview owns annotation editing; it posts the full set after each change and the
-  // host persists it to `.betaxiv/annotations/<basename>.json` (the webview never
+  // host persists it to `.betaxiv/annotations/<contentId>.json` (the webview never
   // touches the filesystem — same boundary as the summary JSON).
   | { type: "annotations-save"; annotations: Annotation[] };

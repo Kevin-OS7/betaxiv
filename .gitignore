@@ -7,6 +7,12 @@ papers/*
 # Highlights + notes are personal reading annotations — stay local (privacy), like summaries.
 .betaxiv/annotations/
 
+# Content-id cache (path -> hash) and pre-migration backups: local scratch in this dev repo.
+# (In a real library index.json is deterministic and may be committed; here .betaxiv is a
+# smoke-test scratch dir, so keep it out of git like the summaries above.)
+.betaxiv/index.json
+.betaxiv/legacy/
+
 # Extension build artifacts and deps.
 extension/node_modules/
 extension/dist/

@@ -14,11 +14,42 @@ writing. The contract between you and the extension is a single versioned JSON f
 - **Input:** a PDF, normally under `papers/` (e.g. `papers/attention.pdf`). If the user
   named a specific file, use that; otherwise summarize each PDF in `papers/` that does
   not yet have an up-to-date summary.
-- **Output:** `.betaxiv/summaries/<basename>.summary.json`, where `<basename>` is the
-  PDF filename without its `.pdf` extension (e.g. `papers/attention.pdf` →
-  `.betaxiv/summaries/attention.summary.json`). Create the directory if missing.
+- **Output:** `.betaxiv/summaries/<id>.summary.json`, where `<id>` is the PDF's **content
+  id** — the first 16 hex chars of the SHA-256 of its raw bytes. The extension keys data by
+  content, not filename, so summaries and highlights follow the paper through any rename or
+  move. Compute the id with the bundled helper (it lives next to this `SKILL.md` — see
+  "Locating figures" for how to set `HELPER`):
+  ```bash
+  ID=$(python3 "$HELPER" hash papers/attention.pdf)   # e.g. 9f2c1ab34de7f001
+  ```
+  then write `.betaxiv/summaries/$ID.summary.json`. Create the directory if missing.
+- **Index:** after writing the summary, upsert `.betaxiv/index.json` so a human browsing
+  `.betaxiv/` can tell which file is which (the extension also maintains this, but write it
+  yourself in case the user never opens the PDF in the extension first). It maps each PDF's
+  workspace-relative path to its content id. **Read-modify-write — never overwrite it**, or
+  you'll wipe other papers' entries:
+  ```bash
+  python3 - "$ID" papers/attention.pdf "Attention Is All You Need" <<'PY'
+  import json, os, sys
+  idx_id, pdf, title = sys.argv[1], sys.argv[2], sys.argv[3]
+  path = ".betaxiv/index.json"
+  try:
+      with open(path) as f: data = json.load(f)
+  except Exception:
+      data = {}
+  data.setdefault("version", 1)
+  data["note"] = ("Rebuildable cache: maps each PDF's workspace-relative path to the "
+                  "SHA-256 content id BetaXiv keys its summaries/annotations by. "
+                  "Deterministic — safe to commit, delete, or regenerate by re-hashing the PDFs.")
+  data.setdefault("entries", {})[pdf] = {"hash": idx_id, "size": os.path.getsize(pdf), "title": title}
+  os.makedirs(".betaxiv", exist_ok=True)
+  with open(path, "w") as f: json.dump(data, f, indent=2); f.write("\n")
+  PY
+  ```
 - **Contract:** the output MUST validate against `schema/summary.schema.v2.json`. Read
   that schema and match it exactly. `schema/example.summary.json` is a filled-in example.
+  Keep `paper.sourcePath` set to the PDF's path (e.g. `papers/attention.pdf`) — the content
+  id keys the file, but `sourcePath` keeps the human-readable origin inside the summary.
 
 ## How to read the PDF
 
@@ -185,7 +216,7 @@ For a quick pre-write check you can run this **dependency-free** Node snippet (n
 no `npm install` — works from any directory; set `SUMMARY` to the file you wrote):
 
 ```bash
-SUMMARY=.betaxiv/summaries/<basename>.summary.json node -e '
+SUMMARY=.betaxiv/summaries/$ID.summary.json node -e '
 const fs=require("fs"); const e=[];
 let d; try { d=JSON.parse(fs.readFileSync(process.env.SUMMARY,"utf8")); }
 catch(x){ console.log("INVALID: not JSON - "+x.message); process.exit(1); }
@@ -214,13 +245,14 @@ if(!m||Number.isNaN(Date.parse(ts))||cal.getUTCFullYear()!=+m[1]||cal.getUTCMont
 console.log(e.length?("INVALID:\n- "+e.join("\n- ")):"OK");'
 ```
 
-Then write the JSON to `.betaxiv/summaries/<basename>.summary.json`. The extension's
-file watcher live-updates the right pane the moment you save.
+Then write the JSON to `.betaxiv/summaries/$ID.summary.json` (and upsert `.betaxiv/index.json`
+as shown under "Inputs and outputs"). The extension's file watcher live-updates the right pane
+the moment you save.
 
 ## Boundaries
 
-- Write **only** the summary JSON (and create its directory). Don't modify the PDF, the
-  schema, or the extension.
+- Write **only** the summary JSON and `.betaxiv/index.json` (and create their directory).
+  Don't modify the PDF, the schema, or the extension.
 - Don't call external summary APIs — the inference is you, running under the user's own
   login. That's the whole point of the project (no second subscription, no per-token key).
 

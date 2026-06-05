@@ -557,6 +557,23 @@ def cmd_tighten(args):
     pdf.close()
 
 
+def cmd_hash(args):
+    """Print the BetaXiv content id: the first N hex chars of the PDF's SHA-256.
+
+    This is the SINGLE SOURCE OF TRUTH for how a PDF maps to its summary/annotation
+    filenames. The extension computes the *identical* value in TypeScript
+    (sha256(raw bytes), hex, sliced to the same length), so both sides agree on
+    `.betaxiv/summaries/<id>.summary.json` no matter how the PDF is renamed or moved.
+    """
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(args.pdf, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    print(h.hexdigest()[: args.len])
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -614,6 +631,14 @@ def main():
     c.add_argument("pdf")
     c.add_argument("--page", type=int, required=True)
     c.set_defaults(func=cmd_candidates)
+
+    hh = sub.add_parser(
+        "hash",
+        help="print the BetaXiv content id (first 16 hex of the PDF's SHA-256) that keys its summary/annotations",
+    )
+    hh.add_argument("pdf")
+    hh.add_argument("--len", type=int, default=16, help="hex chars to keep (default 16; MUST match the extension)")
+    hh.set_defaults(func=cmd_hash)
 
     args = p.parse_args()
     args.func(args)
