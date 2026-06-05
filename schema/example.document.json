@@ -1,0 +1,75 @@
+{
+  "schemaVersion": "1.0",
+  "doc": {
+    "id": "model-comparison",
+    "title": "Model comparison & pipeline",
+    "kind": "comparison",
+    "sourcePath": "papers/attention-is-all-you-need.pdf",
+    "description": "Side-by-side params/BLEU table plus the encoder–decoder data flow."
+  },
+  "blocks": [
+    {
+      "type": "paragraph",
+      "text": "A compact comparison of the **Transformer** against the recurrent and convolutional baselines it replaced, followed by the high-level data flow through the architecture."
+    },
+    {
+      "type": "table",
+      "caption": "WMT 2014 English-to-German: quality vs. training cost.",
+      "header": ["Model", "Params", "BLEU", "Training cost (FLOPs)"],
+      "rows": [
+        ["ByteNet", "—", "23.75", "—"],
+        ["GNMT + RL", "278M", "24.6", "$1.4\\times10^{20}$"],
+        ["ConvS2S", "—", "25.16", "$1.5\\times10^{20}$"],
+        ["Transformer (base)", "65M", "27.3", "$3.3\\times10^{18}$"],
+        ["Transformer (big)", "213M", "28.4", "$2.3\\times10^{19}$"]
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "The encoder maps the input to continuous representations; the decoder attends over them while auto-regressively emitting tokens:"
+    },
+    {
+      "type": "diagram",
+      "mermaid": "flowchart LR\n  I[Input tokens] --> E[Encoder stack x6]\n  E --> A[Cross-attention]\n  A --> D[Decoder stack x6]\n  D --> O[Output probabilities]",
+      "caption": "End-to-end data flow through the Transformer."
+    },
+    {
+      "type": "diagram",
+      "mermaid": "xychart-beta\n  title \"BLEU by model\"\n  x-axis [GNMT, ConvS2S, \"T-base\", \"T-big\"]\n  y-axis \"BLEU\" 22 --> 29\n  bar [24.6, 25.16, 27.3, 28.4]"
+    },
+    {
+      "type": "chart",
+      "kind": "scatter",
+      "title": "Quality vs. training cost",
+      "caption": "BLEU against training FLOPs (log x) — the Transformer is both better and cheaper.",
+      "alt": "Scatter plot of BLEU versus training FLOPs on a log x-axis; Transformer points sit upper-left of the recurrent/convolutional baselines.",
+      "legend": true,
+      "xAxis": { "label": "Training cost (FLOPs)", "scale": "log", "domain": "auto" },
+      "yAxis": { "label": "BLEU", "scale": "linear", "domain": [23, 29] },
+      "series": [
+        {
+          "name": "Baselines",
+          "marker": "circle",
+          "points": [
+            { "x": 1.4e20, "y": 24.6, "label": "GNMT+RL" },
+            { "x": 1.5e20, "y": 25.16, "label": "ConvS2S" }
+          ]
+        },
+        {
+          "name": "Transformer",
+          "marker": "diamond",
+          "points": [
+            { "x": 3.3e18, "y": 27.3, "label": "base", "yError": 0.2 },
+            { "x": 2.3e19, "y": 28.4, "label": "big", "yError": { "low": 28.1, "high": 28.6 } }
+          ]
+        }
+      ]
+    }
+  ],
+  "figures": [],
+  "generatedBy": {
+    "agent": "Claude Code",
+    "model": "claude-opus-4-8",
+    "timestamp": "2026-06-05T00:00:00Z"
+  }
+}

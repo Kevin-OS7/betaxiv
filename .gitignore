@@ -3,6 +3,7 @@ papers/*
 !papers/.gitkeep
 .betaxiv/summaries/*
 !.betaxiv/summaries/.gitkeep
+.betaxiv/docs/
 
 # Highlights + notes are personal reading annotations — stay local (privacy), like summaries.
 .betaxiv/annotations/

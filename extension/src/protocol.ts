@@ -38,6 +38,70 @@ export type Block =
   | { type: "formula"; text: string }
   | { type: "figure"; label: string };
 
+/** A declarative data table. Cells are inline-markup strings (**bold**, `code`, $math$). */
+export interface TableBlock {
+  type: "table";
+  caption?: string | null;
+  header: string[];
+  rows: string[][];
+}
+
+/** A declarative diagram: Mermaid source the webview renders to SVG (the agent never draws). */
+export interface DiagramBlock {
+  type: "diagram";
+  mermaid: string;
+  caption?: string | null;
+}
+
+/** Symmetric ± error (a number) or an absolute interval {low, high}, in data units. */
+export type ChartErrorBar = number | { low: number; high: number };
+
+export interface ChartPoint {
+  x: number;
+  y: number;
+  label?: string | null;
+  xError?: ChartErrorBar;
+  yError?: ChartErrorBar;
+}
+
+export interface ChartSeries {
+  name: string;
+  marker?: "circle" | "square" | "triangle" | "diamond" | "cross";
+  /** Optional hex color (#rgb or #rrggbb); falls back to the auto-assigned palette color. */
+  color?: string;
+  points: ChartPoint[];
+}
+
+export interface ChartAxis {
+  label: string;
+  scale: "linear" | "log";
+  domain?: "auto" | [number, number];
+  tickCount?: number;
+}
+
+/**
+ * A scientific plot (scatter or numeric-x line) the extension draws as a crisp vector SVG from
+ * declarative data: log axes, error bars, multiple series, legend. Categorical BAR charts use a
+ * Mermaid `diagram` (xychart-beta) instead.
+ */
+export interface ChartBlock {
+  type: "chart";
+  kind: "scatter" | "line";
+  title?: string | null;
+  caption?: string | null;
+  alt?: string | null;
+  legend?: boolean;
+  xAxis: ChartAxis;
+  yAxis: ChartAxis;
+  series: ChartSeries[];
+}
+
+/**
+ * Blocks allowed inside an AIDoc: the summary block union plus the doc-only declarative
+ * `table` and `diagram` blocks. Summaries keep using the narrower `Block`.
+ */
+export type DocBlock = Block | TableBlock | DiagramBlock | ChartBlock;
+
 export interface Figure {
   label: string;
   caption: string;
@@ -79,6 +143,25 @@ export interface PaperSummary {
   };
 }
 
+/** A validated AIDoc (mirrors schema/document.schema.v1.json). */
+export interface PaperDoc {
+  schemaVersion: "1.0";
+  doc: {
+    id: string;
+    title: string;
+    kind: string;
+    sourcePath: string;
+    description: string | null;
+  };
+  blocks: DocBlock[];
+  figures?: Figure[];
+  generatedBy: {
+    agent: string;
+    model: string | null;
+    timestamp: string;
+  };
+}
+
 /** Host -> webview messages. */
 export type HostMessage =
   | {
@@ -93,6 +176,14 @@ export type HostMessage =
   | { type: "summary"; summary: PaperSummary }
   | { type: "summary-missing"; summaryRelPath: string; skillName: string }
   | { type: "summary-invalid"; summaryRelPath: string; errors: string[] }
+  // The full set of validated AIDocs for this paper, rebuilt and re-sent on any change.
+  // `invalid` carries docs that failed schema validation so the UI can surface them.
+  | {
+      type: "docs";
+      docs: PaperDoc[];
+      invalid: { relPath: string; errors: string[] }[];
+      docsSkillName: string;
+    }
   | { type: "annotations"; annotations: Annotation[] };
 
 /** Webview -> host messages. */

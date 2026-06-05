@@ -41,7 +41,7 @@ suite("BetaXiv extension", () => {
     assert.ok(hasReader, `no BetaXiv tab found; tabs: ${tabs.map((t) => t.label).join(", ")}`);
   });
 
-  test("installSkill copies SKILL.md + schema + crop_helper into a fresh agent dir", async () => {
+  test("installSkill copies both skills (SKILL.md + schema + crop_helper) into a fresh agent dir", async () => {
     const folder = vscode.workspace.workspaceFolders?.[0];
     assert.ok(folder, "no workspace folder");
 
@@ -51,6 +51,7 @@ suite("BetaXiv extension", () => {
       vscode.Uri.joinPath(folder.uri, top),
       vscode.Uri.joinPath(folder.uri, top, "skills"),
       vscode.Uri.joinPath(folder.uri, top, "skills", "betaxiv-summarizer"),
+      vscode.Uri.joinPath(folder.uri, top, "skills", "betaxiv-documenter"),
     ]);
     const exists = async (u: vscode.Uri) => {
       try {
@@ -70,14 +71,20 @@ suite("BetaXiv extension", () => {
     try {
       await vscode.commands.executeCommand("betaxiv.installSkill");
 
-      const skillDir = vscode.Uri.joinPath(folder.uri, ".agents", "skills", "betaxiv-summarizer");
-      // The skill body, its co-located schema, and the (load-bearing) figure helper must land.
-      await vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "SKILL.md"));
-      await vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "summary.schema.v2.json"));
-      await vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "crop_helper.py"));
+      const agentSkills = vscode.Uri.joinPath(folder.uri, ".agents", "skills");
+      // Each skill's body, its co-located contract schema, and the (load-bearing) figure helper
+      // must land. Both betaxiv-summarizer and betaxiv-documenter are installed together.
+      const summarizer = vscode.Uri.joinPath(agentSkills, "betaxiv-summarizer");
+      await vscode.workspace.fs.stat(vscode.Uri.joinPath(summarizer, "SKILL.md"));
+      await vscode.workspace.fs.stat(vscode.Uri.joinPath(summarizer, "summary.schema.v2.json"));
+      await vscode.workspace.fs.stat(vscode.Uri.joinPath(summarizer, "crop_helper.py"));
+      const documenter = vscode.Uri.joinPath(agentSkills, "betaxiv-documenter");
+      await vscode.workspace.fs.stat(vscode.Uri.joinPath(documenter, "SKILL.md"));
+      await vscode.workspace.fs.stat(vscode.Uri.joinPath(documenter, "document.schema.v1.json"));
+      await vscode.workspace.fs.stat(vscode.Uri.joinPath(documenter, "crop_helper.py"));
       // Python build noise must NOT ship into users' workspaces.
       await assert.rejects(
-        async () => vscode.workspace.fs.stat(vscode.Uri.joinPath(skillDir, "__pycache__")),
+        async () => vscode.workspace.fs.stat(vscode.Uri.joinPath(summarizer, "__pycache__")),
         "__pycache__ should be filtered out of the vendored skill"
       );
     } finally {
