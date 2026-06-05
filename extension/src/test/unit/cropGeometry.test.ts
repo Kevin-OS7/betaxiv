@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Bbox } from "../../protocol";
-import { normalizeBbox, sourceRect } from "../../webview/cropGeometry";
+import { normalizeBbox, sourceRect, figureContainingPoint } from "../../webview/cropGeometry";
 
 test("normalizeBbox orders reversed corners and clamps out-of-range", () => {
   // x emitted high→low, y in range but with a negative/over-1 spill.
@@ -51,4 +51,30 @@ test("sourceRect clamps the rect inside the canvas bounds", () => {
   assert.ok(r.sx + r.sw <= 1000);
   assert.ok(r.sy + r.sh <= 1000);
   assert.ok(r.sw >= 1 && r.sh >= 1);
+});
+
+test("figureContainingPoint returns the figure whose bbox holds the point on that page", () => {
+  const figs = [
+    { label: "Figure 1", page: 1, bbox: [0.1, 0.1, 0.4, 0.4] as Bbox },
+    { label: "Figure 2", page: 1, bbox: [0.5, 0.5, 0.9, 0.9] as Bbox },
+  ];
+  assert.equal(figureContainingPoint(figs, 1, 0.25, 0.25), "Figure 1");
+  assert.equal(figureContainingPoint(figs, 1, 0.7, 0.7), "Figure 2");
+  assert.equal(figureContainingPoint(figs, 1, 0.45, 0.45), ""); // in the gap between them
+});
+
+test("figureContainingPoint filters by page and skips figures without a bbox", () => {
+  const figs = [
+    { label: "Figure 1", page: 2, bbox: [0.1, 0.1, 0.9, 0.9] as Bbox }, // wrong page
+    { label: "Table 1", page: 1, bbox: null }, // no region
+  ];
+  assert.equal(figureContainingPoint(figs, 1, 0.5, 0.5), ""); // page 2 figure not considered on p.1
+});
+
+test("figureContainingPoint prefers the smallest (most specific) containing figure", () => {
+  const figs = [
+    { label: "Figure 3", page: 1, bbox: [0.0, 0.0, 1.0, 1.0] as Bbox }, // whole page
+    { label: "Figure 3a", page: 1, bbox: [0.1, 0.1, 0.5, 0.5] as Bbox }, // subfigure
+  ];
+  assert.equal(figureContainingPoint(figs, 1, 0.3, 0.3), "Figure 3a");
 });

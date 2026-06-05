@@ -27,6 +27,37 @@ export function normalizeBbox(bbox: Bbox): NormBox | null {
   return { x0, y0, x1, y1, wN, hN };
 }
 
+/** Minimal shape of a cataloged figure for point-hit testing (a subset of protocol `Figure`). */
+export interface FigureRegion {
+  label: string;
+  page: number | null;
+  bbox: Bbox | null;
+}
+
+/**
+ * Label of the cataloged figure whose normalized bbox contains the point (cx,cy) on `page`, or ""
+ * if none. Point and bbox share the same upright-cropBox [0,1] frame (see {@link normalizeBbox}),
+ * which is also the frame PDF selection rects are normalized into. When figures nest/overlap, the
+ * smallest-area (most specific) containing one wins. Used to tag a PDF text selection with the
+ * figure it sits inside ("a label copied out of Figure 2"). Pure geometry — DOM-free.
+ */
+export function figureContainingPoint(
+  figures: FigureRegion[],
+  page: number,
+  cx: number,
+  cy: number,
+): string {
+  let best: { label: string; area: number } | null = null;
+  for (const fig of figures) {
+    if (fig.page !== page || !fig.bbox) continue;
+    const nb = normalizeBbox(fig.bbox);
+    if (!nb || cx < nb.x0 || cx > nb.x1 || cy < nb.y0 || cy > nb.y1) continue;
+    const area = nb.wN * nb.hN;
+    if (!best || area < best.area) best = { label: fig.label, area };
+  }
+  return best?.label ?? "";
+}
+
 export interface SourceRect {
   sx: number;
   sy: number;

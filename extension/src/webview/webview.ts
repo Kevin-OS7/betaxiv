@@ -16,7 +16,7 @@ import type {
   Annotation,
   AnnotationRect,
 } from "../protocol";
-import { normalizeBbox, sourceRect } from "./cropGeometry";
+import { normalizeBbox, sourceRect, figureContainingPoint } from "./cropGeometry";
 import { renderChartSvg } from "./chart";
 import {
   AnnotationStore,
@@ -25,6 +25,7 @@ import {
   normalizeClientRects,
   denormRect,
   pointInRects,
+  unionBbox,
 } from "./annotations";
 import { enableCopyReflow, reflowCurrentSelection } from "./textLayerSelection";
 import {
@@ -35,6 +36,7 @@ import {
   type PageText,
   type PdfMatch,
 } from "./findText";
+import { buildRefLine, buildCopyPayload } from "./refLine";
 
 interface VsCodeApi {
   postMessage(msg: unknown): void;
@@ -2006,7 +2008,7 @@ selToolbar.appendChild(selNoteBtn);
 const selCopyBtn = document.createElement("button");
 selCopyBtn.className = "sel-copy-btn";
 selCopyBtn.append(...copyWithPathLabel());
-selCopyBtn.title = "Copy selection with file path";
+selCopyBtn.title = "Copy selection with file path & position";
 selCopyBtn.addEventListener("click", copySelectionWithPath);
 selToolbar.appendChild(selCopyBtn);
 // Pressing a toolbar button must not collapse/blur the selection before the click lands.
@@ -2072,20 +2074,71 @@ function addNoteFromSelection(): void {
   openNotePopover(a, pos.x, pos.y);
 }
 
-// Copy the current selection prefixed with the PDF's relative path: "<relpath>\n<text>".
-// Uses the reflowed PDF text when available (the toolbar only shows for PDF selections).
+// Which cataloged figure (if any) the current PDF selection sits inside — so a label copied out of
+// a figure says WHICH figure. The summary's figures[] carry a page + normalized bbox in the SAME
+// upright-cropBox frame as the selection rects (see cropGeometry), so we just test the selection's
+// center against each figure's bbox on its page and take the smallest (most specific) containing
+// one. Empty when no summary is loaded, the figure has no bbox, or the selection isn't in a figure.
+function pdfSelectionFigureLabel(): string {
+  const anchor = currentSelectionAnchor;
+  if (!anchor || summaryState.kind !== "ready") return "";
+  const u = unionBbox(anchor.rects);
+  if (!u) return "";
+  return figureContainingPoint(
+    summaryState.summary.summary.figures,
+    anchor.page,
+    (u.x0 + u.x1) / 2,
+    (u.y0 + u.y1) / 2
+  );
+}
+
+// --- "Ref" provenance line (Copy^p) -----------------------------------------
+// Both Copy^p buttons prefix the copied text with one line — `Ref path=<file>, <typed keys…>` —
+// then the selection on the following lines. Location keys are context-specific: `page` (PDF page),
+// `fig` (the figure / diagram / table the text sits in), `sec` (nearest summary/AIDoc heading); the
+// pure line assembly + quoting is buildRefLine (refLine.ts). These helpers extract the field values
+// from the DOM. So a label copied out of a figure carries which file, page, and element it's from.
+function refCollapse(s: string | null | undefined): string {
+  return (s ?? "").replace(/\s+/g, " ").trim();
+}
+function refClip(s: string): string {
+  return s.length > 100 ? `${s.slice(0, 100)}…` : s;
+}
+// Page number from a `.page-badge` ("p.5") inside `el`, if any (kept as its own `page=` key, not
+// left inside the fig/sec text).
+function refPageFromBadge(el: Element | null): number | undefined {
+  const m = el?.querySelector(".page-badge")?.textContent?.match(/(\d+)/);
+  return m ? Number(m[1]) : undefined;
+}
+// `el`'s text with any `.page-badge` removed, collapsed and clipped.
+function refTextWithoutBadge(el: Element | null): string {
+  if (!el) return "";
+  const clone = el.cloneNode(true) as Element;
+  clone.querySelectorAll(".page-badge").forEach((b) => b.remove());
+  return refClip(refCollapse(clone.textContent));
+}
+
+// Copy the PDF selection as: `Ref path=<pdf>, page=<N>[, fig="…"]` then the text. The page comes
+// from the live selection anchor (a multi-page selection anchors to its start page); `fig` is added
+// when the selection lands inside a cataloged figure. Uses the reflowed PDF text when available.
 function copySelectionWithPath(): void {
   const text = reflowCurrentSelection() ?? window.getSelection()?.toString() ?? "";
   if (!text.trim()) return;
-  const prefix = openedPdfRelPath.trim();
-  const payload = prefix ? `${prefix}\n${text}` : text;
+  const path = openedPdfRelPath.trim();
+  const ref = path
+    ? buildRefLine(path, [
+        ["page", currentSelectionAnchor?.page],
+        ["fig", pdfSelectionFigureLabel() || undefined],
+      ])
+    : "";
+  const payload = buildCopyPayload(ref, text);
   const clip = navigator.clipboard;
   if (!clip) {
     showToast("Clipboard unavailable.");
     return;
   }
   void clip.writeText(payload).then(
-    () => showToast("Copied with file path."),
+    () => showToast(ref ? "Copied with Ref." : "Copied."),
     () => showToast("Could not copy to clipboard.")
   );
   window.getSelection()?.removeAllRanges();
@@ -2111,7 +2164,7 @@ docCopyToolbar.hidden = true;
 const docCopyBtn = document.createElement("button");
 docCopyBtn.className = "sel-copy-btn";
 docCopyBtn.append(...copyWithPathLabel());
-docCopyBtn.title = "Copy selection with file path";
+docCopyBtn.title = "Copy selection with file path & position";
 docCopyBtn.addEventListener("click", copyDocSelectionWithPath);
 docCopyToolbar.appendChild(docCopyBtn);
 // Pressing the button must not collapse the selection before the click lands.
@@ -2154,19 +2207,57 @@ function hideDocCopyToolbar(): void {
   docCopyToolbar.hidden = true;
 }
 
-// Copy the summary/AIDoc selection prefixed with the artifact's file path: "<relpath>\n<text>".
+// Structured location of the current summary/AIDoc selection, for the Ref line:
+//   • inside a figure / diagram / chart / table → `fig` = its caption (label + caption; a
+//     captionless diagram/chart/table degrades to a generic kind), `page` from the caption badge.
+//   • otherwise → `sec` = nearest heading at/before the selection, `page` from its badge.
+// The "p.N" page badge is pulled into its own `page` field rather than left inside fig/sec text.
+function summarySelectionRef(): { fig?: string; sec?: string; page?: number } {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return {};
+  const node = sel.getRangeAt(0).startContainer;
+  const startEl = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
+  if (!startEl || !summaryRoot.contains(startEl)) return {};
+
+  const figure = startEl.closest<HTMLElement>(".fig, .block-table");
+  if (figure) {
+    const cap = figure.querySelector("figcaption");
+    const fig = refTextWithoutBadge(cap) || (figure.matches(".block-table") ? "Table" : "Figure");
+    return { fig, page: refPageFromBadge(cap) };
+  }
+
+  // Nearest heading at/before the selection (querySelectorAll is in document order).
+  let headingEl: HTMLElement | null = null;
+  for (const h of Array.from(summaryRoot.querySelectorAll<HTMLElement>("h1, h2, h3, .doc-heading"))) {
+    if (h.compareDocumentPosition(startEl) & Node.DOCUMENT_POSITION_FOLLOWING) headingEl = h;
+    else break;
+  }
+  if (!headingEl) return {};
+  return { sec: refTextWithoutBadge(headingEl) || undefined, page: refPageFromBadge(headingEl) };
+}
+
+// Copy the summary/AIDoc selection as: `Ref path=<artifact>[, fig="…"|sec="…"][, page=N]` then text.
 function copyDocSelectionWithPath(): void {
   const text = window.getSelection()?.toString() ?? "";
   if (!text.trim()) return;
-  const prefix = currentArtifactRelPath().trim();
-  const payload = prefix ? `${prefix}\n${text}` : text;
+  const path = currentArtifactRelPath().trim();
+  let ref = "";
+  if (path) {
+    const loc = summarySelectionRef();
+    ref = buildRefLine(path, [
+      ["fig", loc.fig],
+      ["sec", loc.sec],
+      ["page", loc.page],
+    ]);
+  }
+  const payload = buildCopyPayload(ref, text);
   const clip = navigator.clipboard;
   if (!clip) {
     showToast("Clipboard unavailable.");
     return;
   }
   void clip.writeText(payload).then(
-    () => showToast(prefix ? "Copied with file path." : "Copied."),
+    () => showToast(ref ? "Copied with Ref." : "Copied."),
     () => showToast("Could not copy to clipboard.")
   );
   window.getSelection()?.removeAllRanges();
