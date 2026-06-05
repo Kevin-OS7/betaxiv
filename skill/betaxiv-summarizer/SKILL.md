@@ -14,6 +14,15 @@ writing. The contract between you and the extension is a single versioned JSON f
 - **Input:** a PDF, normally under `papers/` (e.g. `papers/attention.pdf`). If the user
   named a specific file, use that; otherwise summarize each PDF in `papers/` that does
   not yet have an up-to-date summary.
+  - **When the target is unclear, ask — don't guess.** Resolve the file *before* reading.
+    If the user's reference is ambiguous (a partial/fuzzy name that matches **several**
+    PDFs, e.g. "the transformer paper" with three candidates), the named file **doesn't
+    exist** (typo, wrong folder, or it's outside `papers/`), or no file is named **and**
+    `papers/` is empty or holds many un-summarized PDFs with no obvious single target —
+    stop and throw the question back: list the candidate paths you found (or note that you
+    found none) and ask which one(s) they mean, rather than picking one and summarizing the
+    wrong paper. Only auto-proceed when the target is unambiguous (exactly one match, or a
+    clear "all of `papers/`" batch).
 - **Output:** `.betaxiv/summaries/<id>.summary.json`, where `<id>` is the PDF's **content
   id** — the first 16 hex chars of the SHA-256 of its raw bytes. The extension keys data by
   content, not filename, so summaries and highlights follow the paper through any rename or

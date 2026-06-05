@@ -23,6 +23,16 @@ This skill is the sibling of `betaxiv-summarizer` and shares its discipline (con
   document. The user may also ask you to **fetch** information that isn't in the paper (e.g.
   "add Llama-3 and GPT-4 to the results table") — go get it (web, other files, the repo) and
   structure it into the doc. That open-endedness is the point.
+  - **When the target is unclear, ask — don't guess.** A doc is keyed to one PDF's content
+    id, so resolve **which paper** before computing `$ID` or writing anything. If the
+    reference is ambiguous (a partial/fuzzy name matching **several** PDFs), the named file
+    **doesn't exist** (typo, wrong folder, or outside `papers/`), or no file is named and
+    `papers/` holds many candidates with no obvious one — stop and throw the question back:
+    list the candidate paths (or note none were found) and ask which paper they mean. Don't
+    document the wrong PDF. Likewise, if **what to document** is too vague to act on (e.g.
+    just "make a doc" with no kind/scope), ask a quick clarifying question — what to compare,
+    which sections, what to fetch — rather than inventing a doc they didn't want. Proceed
+    only once both the paper and the ask are unambiguous.
 - **Output:** `.betaxiv/docs/<id>/<docId>.doc.json`, where:
   - `<id>` is the PDF's **content id** — the first 16 hex chars of the SHA-256 of its raw
     bytes (the SAME key the summarizer uses, so docs follow the paper through any rename/move).
