@@ -97,7 +97,8 @@ const pdfDocPromise = new Promise<any>((resolve) => {
 
 interface SavedState {
   pdfScrollTop?: number;
-  zoom?: number;
+  fitMode?: boolean; // true: page tracks pane width; false: page held at absScale
+  absScale?: number; // absolute render scale (1 == PDF native size) when not fit-to-width
   summaryOpen?: boolean;
   splitCols?: string;
   summaryZoom?: number;
@@ -378,19 +379,34 @@ async function renderPdf(
 
     // Mutable: the fit-to-width baseline must track the pane width, which changes when the
     // summary pane is toggled/resized or the window is resized (see the ResizeObserver below).
-    let containerWidth = pdfPages.clientWidth || 600;
+    // Measure the scroll container (pdfPane), not pdfPages: when a pinned page overflows the pane
+    // pdfPages grows to the page width, but pdfPane.clientWidth stays the true available width
+    // (the scrollbar gutter is reserved), so Fit always computes against the real column width.
+    const paneWidth = () => pdfPane.clientWidth || 600;
+    let containerWidth = paneWidth();
     const dpr = window.devicePixelRatio || 1;
 
-    // User zoom, relative to the fit-to-width baseline (zoom 1 == 100% == fits the pane).
-    const MIN_ZOOM = 0.5;
-    const MAX_ZOOM = 3;
+    // Sticky-fit zoom model. Two modes:
+    //   fitMode=true  — each page is scaled to fill the pane width (capped at FIT_CAP). A pane
+    //                   resize re-fits, so the page always fills the column. This is the default
+    //                   on open and what the "Fit" button returns to.
+    //   fitMode=false — the page is held at a fixed absolute scale (absScale, 1 == PDF native
+    //                   size), the SAME for every page. A pane resize no longer rezooms it; if the
+    //                   pane gets narrower than the page, the CSS just adds a horizontal scrollbar.
+    // Manually zooming (buttons / Ctrl+scroll-equiv keys) leaves fit mode and pins the size; this
+    // is why dragging the splitter or toggling the sidebar stops silently rescaling the PDF.
+    const FIT_CAP = 2; // fit-to-width never magnifies a page past 200% of its native size
+    const MIN_SCALE = 0.25;
+    const MAX_SCALE = 5;
+    const clampScale = (s: number) => Math.max(MIN_SCALE, Math.min(MAX_SCALE, s));
     const savedState = (vscode.getState() as SavedState) ?? {};
-    let zoom =
-      typeof savedState.zoom === "number"
-        ? Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, savedState.zoom))
-        : 1;
+    let fitMode = savedState.fitMode ?? true;
+    let absScale =
+      typeof savedState.absScale === "number" ? clampScale(savedState.absScale) : 1;
+    const fitFactor = (baseWidth: number) =>
+      Math.min(FIT_CAP, (containerWidth - 16) / baseWidth);
     const scaleFor = (baseWidth: number) =>
-      Math.min(2, (containerWidth - 16) / baseWidth) * zoom;
+      fitMode ? fitFactor(baseWidth) : absScale;
 
     // Lazy rendering: build placeholder slots up front (so scroll geometry is stable),
     // then rasterize a page to canvas only when it nears the viewport, and release its
@@ -582,9 +598,13 @@ async function renderPdf(
       }
     };
 
+    // The effective absolute scale of a standard (page-1-sized) page right now: the fit factor
+    // while fitting, or the pinned absScale otherwise. Used for the % label and as the starting
+    // point when a manual zoom converts "fit" into a pinned absolute size.
+    const effectiveScale = () => (fitMode ? fitFactor(base1.width) : absScale);
     const zoomLevel = document.getElementById("zoom-level");
     const updateZoomLabel = () => {
-      if (zoomLevel) zoomLevel.textContent = `${Math.round(zoom * 100)}%`;
+      if (zoomLevel) zoomLevel.textContent = `${Math.round(effectiveScale() * 100)}%`;
     };
 
     // Re-scale every slot to the current zoom/containerWidth: drop stale canvases,
@@ -615,29 +635,45 @@ async function renderPdf(
       rendered.length = 0;
     };
 
-    const applyZoom = (target: number) => {
-      const prev = zoom;
-      const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, target));
-      if (Math.abs(next - prev) < 0.001) return;
+    // Manual zoom: pin the page at a fixed absolute scale (leaving fit mode), stepping from
+    // whatever size is on screen now so the first +/− doesn't jump.
+    const applyZoom = (factor: number) => {
+      const prev = effectiveScale();
+      const next = clampScale(prev * factor);
+      if (Math.abs(next - prev) < 0.001 && !fitMode) return;
       const oldScrollTop = pdfPane.scrollTop;
-      zoom = next;
+      fitMode = false;
+      absScale = next;
       rescaleAll();
-      // Heights scale linearly with zoom, so scaling scrollTop keeps the same content
+      // Heights scale linearly with the scale, so scaling scrollTop keeps the same content
       // anchored near the top of the viewport.
       pdfPane.scrollTop = oldScrollTop * (next / prev);
       updateZoomLabel();
       renderVisible();
-      saveState({ zoom: next });
+      saveState({ fitMode, absScale });
     };
 
-    // Re-fit to the pane width when it changes (summary toggle/resize, window resize),
-    // preserving the scroll position proportionally. Debounced so a splitter drag doesn't
-    // trigger a re-render storm.
-    const relayout = () => {
-      const w = pdfPages.clientWidth;
-      if (!w || w === containerWidth) return;
+    // Fit button / Ctrl+0: (re-)enter fit-to-width mode, preserving scroll proportionally.
+    const fitWidth = () => {
       const frac = pdfPane.scrollTop / (pdfPages.scrollHeight || 1);
+      fitMode = true;
+      rescaleAll();
+      pdfPane.scrollTop = frac * pdfPages.scrollHeight;
+      updateZoomLabel();
+      renderVisible();
+      saveState({ fitMode });
+    };
+
+    // Pane width changed (summary toggle, splitter drag, sidebar, window resize). In fit mode we
+    // re-fit so the page keeps filling the column; when the size is pinned we deliberately do NOT
+    // rescale — the page holds its size and the pane just reveals more/less of it. Debounced so a
+    // splitter drag doesn't trigger a re-render storm.
+    const relayout = () => {
+      const w = paneWidth();
+      if (!w || w === containerWidth) return;
       containerWidth = w;
+      if (!fitMode) return; // pinned: pane resize must not rezoom the page
+      const frac = pdfPane.scrollTop / (pdfPages.scrollHeight || 1);
       rescaleAll();
       pdfPane.scrollTop = frac * pdfPages.scrollHeight;
       renderVisible();
@@ -649,21 +685,21 @@ async function renderPdf(
     });
     ro.observe(pdfPane);
 
-    document.getElementById("zoom-in")?.addEventListener("click", () => applyZoom(zoom * 1.2));
-    document.getElementById("zoom-out")?.addEventListener("click", () => applyZoom(zoom / 1.2));
-    document.getElementById("zoom-reset")?.addEventListener("click", () => applyZoom(1));
+    document.getElementById("zoom-in")?.addEventListener("click", () => applyZoom(1.2));
+    document.getElementById("zoom-out")?.addEventListener("click", () => applyZoom(1 / 1.2));
+    document.getElementById("zoom-reset")?.addEventListener("click", () => fitWidth());
 
     window.addEventListener("keydown", (e) => {
       if (!(e.ctrlKey || e.metaKey)) return;
       if (e.key === "+" || e.key === "=") {
         e.preventDefault();
-        applyZoom(zoom * 1.2);
+        applyZoom(1.2);
       } else if (e.key === "-" || e.key === "_") {
         e.preventDefault();
-        applyZoom(zoom / 1.2);
+        applyZoom(1 / 1.2);
       } else if (e.key === "0") {
         e.preventDefault();
-        applyZoom(1);
+        fitWidth();
       }
     });
 
@@ -672,7 +708,7 @@ async function renderPdf(
       (e) => {
         if (!(e.ctrlKey || e.metaKey)) return;
         e.preventDefault();
-        applyZoom(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+        applyZoom(e.deltaY < 0 ? 1.1 : 1 / 1.1);
       },
       { passive: false }
     );

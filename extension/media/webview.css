@@ -1270,3 +1270,72 @@ svg.fig-image {
   stroke-width: 1;
   opacity: 0.75;
 }
+
+/* --- Find in the right pane (summary / AIDocs) -----------------------------
+   Our own find widget, scoped to #summary-root, so it never matches the PDF
+   text layer in the left pane (the native webview find searches the whole DOM).
+   Matches are painted via the CSS Custom Highlight API — no DOM mutation, so it
+   coexists with the no-raw-innerHTML summary rendering. */
+#bx-find {
+  position: sticky;
+  top: 8px;
+  z-index: 30;
+  margin-left: auto;          /* right-align within the pane */
+  width: max-content;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--vscode-editorWidget-background, #252526);
+  color: var(--vscode-editorWidget-foreground, inherit);
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.4));
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+}
+#bx-find[hidden] {
+  display: none;
+}
+#bx-find-input {
+  background: var(--vscode-input-background, #3c3c3c);
+  color: var(--vscode-input-foreground, inherit);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 2px;
+  padding: 2px 6px;
+  width: 160px;
+  outline: none;
+}
+#bx-find-input:focus {
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+#bx-find-count {
+  min-width: 36px;
+  text-align: center;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+#bx-find-count.none {
+  color: var(--vscode-errorForeground, #f48771);
+  opacity: 1;
+}
+#bx-find button {
+  background: transparent;
+  color: inherit;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 2px 5px;
+  line-height: 1;
+  font-size: 14px;
+}
+#bx-find button:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.2));
+}
+
+::highlight(bx-find) {
+  background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
+}
+::highlight(bx-find-current) {
+  background-color: var(--vscode-editor-findMatchBackground, rgba(255, 150, 50, 0.6));
+  color: var(--vscode-editor-foreground, inherit);
+}

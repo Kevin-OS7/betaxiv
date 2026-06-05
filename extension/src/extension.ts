@@ -174,6 +174,7 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
     {
       enableScripts: true,
       retainContextWhenHidden: true,
+      enableFindWidget: true,
       localResourceRoots: localRoots(context.extensionUri, pdfUri),
     }
   );
