@@ -27,6 +27,14 @@ import {
   pointInRects,
 } from "./annotations";
 import { enableCopyReflow, reflowCurrentSelection } from "./textLayerSelection";
+import {
+  buildPdfMatches,
+  foldCase,
+  locateAll,
+  ordinalInPage,
+  type PageText,
+  type PdfMatch,
+} from "./findText";
 
 interface VsCodeApi {
   postMessage(msg: unknown): void;
@@ -94,6 +102,15 @@ let resolvePdfDoc: (doc: unknown) => void = () => {};
 const pdfDocPromise = new Promise<any>((resolve) => {
   resolvePdfDoc = resolve;
 });
+
+// Hooks owned by the Find (Ctrl+F) section near the bottom, declared here so module-scope code
+// (renderSlot, setSummaryOpen) can fire them. They stay undefined until that section runs at the
+// end of module load — which is before the host posts `bootstrap`, so they're set before any page
+// renders or pane toggles that matter. `onPageRendered`: a PDF page's text layer just attached →
+// an open PDF find repaints its match highlights. `onSummaryToggle`: the right pane opened/closed
+// → reposition / re-scope the find widget.
+let onPageRendered: ((pageNum: number) => void) | undefined;
+let onSummaryToggle: (() => void) | undefined;
 
 interface SavedState {
   pdfScrollTop?: number;
@@ -203,6 +220,7 @@ function setSummaryOpen(open: boolean): void {
   app.classList.toggle("summary-open", open);
   aidocsToggle.setAttribute("aria-pressed", String(open));
   saveState({ summaryOpen: open });
+  onSummaryToggle?.(); // keep an open find widget positioned / scoped to the visible panes
 }
 setSummaryOpen(summaryOpen);
 
@@ -552,6 +570,7 @@ async function renderPdf(
           slot.el.appendChild(tlb.div);
           slot.tlb = tlb;
           slot.textLayer = tlb.div;
+          onPageRendered?.(slot.pageNum); // PDF find can now paint matches on this page
         } catch {
           // The text layer is a selection convenience; if it fails the page still renders.
           slot.tlb?.cancel();
@@ -1439,8 +1458,14 @@ function selectArtifact(sel: Selection): void {
 }
 
 // Render whatever artifact is currently selected into the right pane. Falls back to the
-// Summary if a previously-selected doc/invalid entry has since disappeared.
+// Summary if a previously-selected doc/invalid entry has since disappeared. The wrapper runs
+// refreshFindIfOpen() after EVERY render path — the doc/invalid branches return early, so an open
+// summary-scoped find must re-match here too (else switching AIDocs leaves stale matches).
 function renderSelection(): void {
+  renderSelectionInner();
+  refreshFindIfOpen();
+}
+function renderSelectionInner(): void {
   if (selection.kind === "doc") {
     const id = selection.id; // capture before the callback (TS won't narrow a mutable `let`)
     const doc = docsState.find((d) => d.doc.id === id);
@@ -2297,6 +2322,469 @@ summaryPane.addEventListener("scroll", hideDocCopyToolbar);
 // Plain Ctrl/Cmd+C copies just the text — the file path is added only via the toolbar's
 // "copy with path" button (see selToolbar), not on every copy.
 enableCopyReflow();
+
+// --- Find (Ctrl+F): pane-aware in-page search -------------------------------
+// Replaces VS Code's native webview find (disabled host-side). Scope follows the focused pane:
+//   • PDF (left)  → searches EVERY page. Page text is extracted once via getTextContent (cheap,
+//     no rasterize); next/prev scroll to a match on any page, even one not currently rendered.
+//   • Summary / AIDocs (right) → searches the rendered #summary-root.
+// Matches are painted with the CSS Custom Highlight API (Range-based, no DOM mutation — coexists
+// with the no-raw-innerHTML rendering). Highlights aren't retained across page eviction/zoom: we
+// rebuild them from the live DOM on every relevant event (page render, nav, query change). The
+// #bx-find styles + ::highlight(bx-find[-current]) rules live in webview.css.
+
+type FindScope = "pdf" | "summary";
+
+// CSS Custom Highlight API surface (typed loosely so we don't depend on the lib shipping it).
+const findHighlightRegistry = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights;
+const FindHighlightCtor = (globalThis as unknown as { Highlight?: new (...ranges: Range[]) => unknown })
+  .Highlight;
+
+function setFindHighlights(all: Range[], current: Range | null): void {
+  if (!findHighlightRegistry || !FindHighlightCtor) return;
+  if (all.length) findHighlightRegistry.set("bx-find", new FindHighlightCtor(...all));
+  else findHighlightRegistry.delete("bx-find");
+  if (current) findHighlightRegistry.set("bx-find-current", new FindHighlightCtor(current));
+  else findHighlightRegistry.delete("bx-find-current");
+}
+function clearFindHighlights(): void {
+  findHighlightRegistry?.delete("bx-find");
+  findHighlightRegistry?.delete("bx-find-current");
+}
+
+// Walk a subtree's text nodes into one string + a map of each node's start offset within it, so a
+// match's [start,end) char range can be turned into a DOM Range. `skip(parentEl)` drops a node's
+// whole subtree (used to keep KaTeX glyph spans out of the summary index).
+interface FindTextSpan {
+  node: Text;
+  start: number;
+}
+function collectFindText(
+  root: HTMLElement,
+  skip?: (parent: Element) => boolean
+): { text: string; spans: FindTextSpan[] } {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const spans: FindTextSpan[] = [];
+  let text = "";
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const t = node as Text;
+    const parent = t.parentElement;
+    if (!t.data || !parent || (skip && skip(parent))) continue;
+    spans.push({ node: t, start: text.length });
+    text += t.data;
+  }
+  return { text, spans };
+}
+
+// A DOM Range for the [start,end) slice of the concatenated text built by collectFindText.
+function findRange(spans: FindTextSpan[], start: number, end: number): Range | null {
+  if (end <= start) return null;
+  const startSpan = spans.find((s) => start >= s.start && start < s.start + s.node.length);
+  const last = end - 1;
+  const endSpan = spans.find((s) => last >= s.start && last < s.start + s.node.length);
+  if (!startSpan || !endSpan) return null;
+  const r = document.createRange();
+  r.setStart(startSpan.node, start - startSpan.start);
+  r.setEnd(endSpan.node, end - endSpan.start);
+  return r;
+}
+
+// All occurrence Ranges of an already-folded needle within `root` (in document order).
+function findRangesIn(root: HTMLElement, needleFolded: string, skip?: (p: Element) => boolean): Range[] {
+  const { text, spans } = collectFindText(root, skip);
+  const ranges: Range[] = [];
+  for (const start of locateAll(foldCase(text, false), needleFolded)) {
+    const r = findRange(spans, start, start + needleFolded.length);
+    if (r) ranges.push(r);
+  }
+  return ranges;
+}
+
+// Smooth-scroll a pane so a Range is comfortably in view — only if it's currently near/off an edge.
+function scrollFindRangeIntoView(range: Range, pane: HTMLElement): void {
+  const rect = range.getBoundingClientRect();
+  if (!rect.width && !rect.height) return;
+  const pr = pane.getBoundingClientRect();
+  const margin = 60;
+  if (rect.top < pr.top + margin || rect.bottom > pr.bottom - margin) {
+    const target = pane.scrollTop + (rect.top - pr.top) - pane.clientHeight / 3;
+    pane.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+  }
+}
+
+// --- Active pane + scope ----------------------------------------------------
+let activePane: FindScope = "pdf";
+pdfPane.addEventListener("pointerdown", () => (activePane = "pdf"), true);
+summaryPane.addEventListener("pointerdown", () => (activePane = "summary"), true);
+function scopeForActivePane(): FindScope {
+  // Only the PDF is searchable when the right pane is collapsed.
+  return summaryOpen && activePane === "summary" ? "summary" : "pdf";
+}
+
+// --- Find state -------------------------------------------------------------
+const findState = { open: false, scope: "pdf" as FindScope, query: "", count: 0, index: -1 };
+let summaryFindRanges: Range[] = [];
+let pdfFindMatches: PdfMatch[] = [];
+let pdfCurrentRange: Range | null = null;
+
+// PDF full-text index: built lazily on first PDF search (getTextContent over every page) and cached
+// for the life of the (single) loaded document.
+let pdfPageTexts: PageText[] | null = null;
+let pdfIndexBuilding = false;
+let pdfIndexPromise: Promise<PageText[]> | null = null;
+async function ensurePdfIndex(): Promise<PageText[]> {
+  if (pdfPageTexts) return pdfPageTexts;
+  if (pdfIndexPromise) return pdfIndexPromise;
+  pdfIndexBuilding = true;
+  updateFindCount();
+  pdfIndexPromise = (async () => {
+    const doc = await pdfDocPromise;
+    const pages: PageText[] = [];
+    if (doc) {
+      for (let i = 1; i <= doc.numPages; i++) {
+        try {
+          const page = await doc.getPage(i);
+          const tc = await page.getTextContent();
+          let text = "";
+          for (const item of tc.items as Array<{ str?: string; hasEOL?: boolean }>) {
+            if (typeof item.str === "string") {
+              text += item.str;
+              if (item.hasEOL) text += "\n";
+            }
+          }
+          pages.push({ pageNum: i, text });
+        } catch {
+          pages.push({ pageNum: i, text: "" }); // a page that won't extract just contributes no hits
+        }
+      }
+    }
+    pdfPageTexts = pages;
+    pdfIndexBuilding = false;
+    // The caller (searchPdf) refreshes the count once it has computed matches — refreshing here
+    // would flash "0/0" for a tick (matches aren't built yet).
+    return pages;
+  })();
+  return pdfIndexPromise;
+}
+
+// --- Widget DOM -------------------------------------------------------------
+const findWidget = document.createElement("div");
+findWidget.id = "bx-find";
+findWidget.hidden = true;
+findWidget.addEventListener("mousedown", (e) => e.stopPropagation()); // don't trip body dismissers
+
+const findScopeChip = document.createElement("button");
+findScopeChip.className = "bx-find-scope";
+findScopeChip.title = "Search scope — click to toggle PDF / summary";
+
+const findInput = document.createElement("input");
+findInput.id = "bx-find-input";
+findInput.type = "text";
+findInput.placeholder = "Find…";
+findInput.setAttribute("aria-label", "Find");
+
+const findCount = document.createElement("span");
+findCount.id = "bx-find-count";
+
+const findPrevBtn = document.createElement("button");
+findPrevBtn.textContent = "‹";
+findPrevBtn.title = "Previous match (Shift+Enter)";
+findPrevBtn.setAttribute("aria-label", "Previous match");
+
+const findNextBtn = document.createElement("button");
+findNextBtn.textContent = "›";
+findNextBtn.title = "Next match (Enter)";
+findNextBtn.setAttribute("aria-label", "Next match");
+
+const findCloseBtn = document.createElement("button");
+findCloseBtn.textContent = "×";
+findCloseBtn.title = "Close (Esc)";
+findCloseBtn.setAttribute("aria-label", "Close find");
+
+findWidget.append(findScopeChip, findInput, findCount, findPrevBtn, findNextBtn, findCloseBtn);
+document.body.appendChild(findWidget);
+
+findScopeChip.addEventListener("click", toggleFindScope);
+findPrevBtn.addEventListener("click", findPrev);
+findNextBtn.addEventListener("click", findNext);
+findCloseBtn.addEventListener("click", closeFind);
+
+let findDebounce: ReturnType<typeof setTimeout> | undefined;
+findInput.addEventListener("input", () => {
+  if (findDebounce) clearTimeout(findDebounce);
+  findDebounce = setTimeout(runFindSearch, 160);
+});
+findInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    if (e.shiftKey) findPrev();
+    else findNext();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    closeFind();
+  }
+});
+
+function positionFindWidget(): void {
+  const pane = findState.scope === "summary" ? summaryPane : pdfPane;
+  const r = pane.getBoundingClientRect();
+  const w = findWidget.getBoundingClientRect().width || 280;
+  const left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + (r.width - w) / 2));
+  findWidget.style.left = `${Math.round(left)}px`;
+  findWidget.style.top = `${Math.round(r.top + 8)}px`;
+}
+
+function updateFindScopeChip(): void {
+  findScopeChip.textContent = findState.scope === "summary" ? "Summary" : "PDF";
+  findScopeChip.disabled = !summaryOpen; // nothing to switch to when the right pane is closed
+}
+
+function toggleFindScope(): void {
+  if (!summaryOpen) return;
+  findState.scope = findState.scope === "pdf" ? "summary" : "pdf";
+  resetFindResults();
+  updateFindScopeChip();
+  positionFindWidget();
+  runFindSearch();
+  findInput.focus();
+}
+
+function resetFindResults(): void {
+  clearFindHighlights();
+  summaryFindRanges = [];
+  pdfFindMatches = [];
+  pdfCurrentRange = null;
+  findState.count = 0;
+  findState.index = -1;
+}
+
+function openFind(scope: FindScope): void {
+  const wasOpen = findState.open;
+  const scopeChanged = wasOpen && scope !== findState.scope;
+  findState.open = true;
+  findState.scope = scope;
+  findWidget.hidden = false;
+  // Switching scope on an already-open widget: drop the old scope's matches/highlights so the
+  // count doesn't briefly show the previous pane's number while the new search runs.
+  if (scopeChanged) resetFindResults();
+  // On a FRESH open, seed from a short, single-line selection (mirrors VS Code's
+  // find-from-selection). Don't clobber the query when Ctrl+F is pressed again while already open.
+  if (!wasOpen) {
+    const sel = window.getSelection()?.toString() ?? "";
+    if (sel && sel.length <= 80 && !sel.includes("\n")) findInput.value = sel;
+  }
+  updateFindScopeChip();
+  positionFindWidget();
+  findInput.focus();
+  findInput.select();
+  runFindSearch();
+}
+
+function closeFind(): void {
+  if (!findState.open) return;
+  findState.open = false;
+  findWidget.hidden = true;
+  resetFindResults();
+  findInput.blur();
+}
+
+function runFindSearch(): void {
+  if (!findState.open) return;
+  findState.query = findInput.value;
+  if (findState.scope === "summary") searchSummary();
+  else searchPdf();
+}
+
+// Called after the right pane re-renders (live-reload / artifact switch) so a summary-scoped find
+// re-matches over the new DOM.
+function refreshFindIfOpen(): void {
+  if (findState.open && findState.scope === "summary") searchSummary();
+}
+
+// --- Summary-scoped search --------------------------------------------------
+function searchSummary(): void {
+  const needle = foldCase(findState.query, false);
+  summaryFindRanges = needle.trim()
+    ? findRangesIn(summaryRoot, needle, (p) => !!p.closest(".katex"))
+    : [];
+  findState.count = summaryFindRanges.length;
+  findState.index = findState.count ? 0 : -1;
+  paintSummaryFind();
+}
+
+function paintSummaryFind(): void {
+  updateFindCount();
+  if (!summaryFindRanges.length) {
+    clearFindHighlights();
+    return;
+  }
+  const cur = summaryFindRanges[findState.index] ?? null;
+  const others = summaryFindRanges.filter((_, i) => i !== findState.index);
+  setFindHighlights(others, cur);
+  if (cur) scrollFindRangeIntoView(cur, summaryPane);
+}
+
+// --- PDF-scoped search (all pages) ------------------------------------------
+function searchPdf(): void {
+  const q = findState.query;
+  pdfFindMatches = [];
+  pdfCurrentRange = null;
+  if (!q.trim()) {
+    findState.count = 0;
+    findState.index = -1;
+    clearFindHighlights();
+    updateFindCount();
+    return;
+  }
+  updateFindCount(); // shows the indexing placeholder on the very first search
+  void ensurePdfIndex().then((pages) => {
+    // Drop a stale resolution (widget closed / pane switched / query moved on while indexing).
+    if (!findState.open || findState.scope !== "pdf" || findState.query !== q) return;
+    pdfFindMatches = buildPdfMatches(pages, q, false);
+    findState.count = pdfFindMatches.length;
+    findState.index = pdfFindMatches.length ? 0 : -1;
+    updateFindCount();
+    if (pdfFindMatches.length) goToPdfMatch(0);
+    else clearFindHighlights();
+  });
+}
+
+let pdfGoTimer: ReturnType<typeof setTimeout> | undefined;
+function goToPdfMatch(i: number): void {
+  if (i < 0 || i >= pdfFindMatches.length) return;
+  findState.index = i;
+  updateFindCount();
+  const m = pdfFindMatches[i];
+  const slot = pdfPages.querySelector<HTMLElement>(`.page-slot[data-page="${m.pageNum}"]`);
+  if (!slot) {
+    repaintPdfFindHighlights();
+    return;
+  }
+  // Aim near the match using its offset within the page text (text isn't perfectly linear in y, but
+  // this lands close enough to bring it on-screen). If the page is off-screen, jump instantly so the
+  // IntersectionObserver renders its text layer; then, once rendered, repaint + smooth-nudge the
+  // exact match into view. The onPageRendered hook is the safety net if the render outlasts the timer.
+  const page = pdfPageTexts?.find((p) => p.pageNum === m.pageNum);
+  const frac = page && page.text.length ? m.start / page.text.length : 0;
+  const aim = slot.offsetTop + frac * slot.offsetHeight - pdfPane.clientHeight / 3;
+  const onScreen =
+    slot.offsetTop < pdfPane.scrollTop + pdfPane.clientHeight &&
+    slot.offsetTop + slot.offsetHeight > pdfPane.scrollTop;
+  if (!onScreen) pdfPane.scrollTo({ top: Math.max(0, aim) }); // instant: force the lazy render
+  if (pdfGoTimer) clearTimeout(pdfGoTimer);
+  pdfGoTimer = setTimeout(
+    () => {
+      repaintPdfFindHighlights();
+      if (pdfCurrentRange) scrollFindRangeIntoView(pdfCurrentRange, pdfPane);
+    },
+    onScreen ? 30 : 320
+  );
+}
+
+// Rebuild the PDF match highlights from whatever text layers are currently rendered. The globally
+// selected match is identified by (page, per-page ordinal) so it survives the getTextContent ↔
+// live-DOM offset differences — within a page the Nth occurrence is the Nth either way.
+let pdfRepaintTimer: ReturnType<typeof setTimeout> | undefined;
+function repaintPdfFindHighlights(): void {
+  if (!findState.open || findState.scope !== "pdf") return;
+  const needle = foldCase(findState.query, false);
+  pdfCurrentRange = null;
+  if (!needle.trim() || !pdfFindMatches.length) {
+    clearFindHighlights();
+    return;
+  }
+  const cur = pdfFindMatches[findState.index];
+  const curOrdinal = ordinalInPage(pdfFindMatches, findState.index);
+  const all: Range[] = [];
+  for (const layer of Array.from(pdfPages.querySelectorAll<HTMLElement>(".textLayer"))) {
+    const slot = layer.closest<HTMLElement>(".page-slot");
+    const pageNum = slot ? Number(slot.dataset.page) : NaN;
+    if (!pageNum) continue;
+    const { text, spans } = collectFindText(layer);
+    locateAll(foldCase(text, false), needle).forEach((start, ord) => {
+      const r = findRange(spans, start, start + needle.length);
+      if (!r) return;
+      if (cur && pageNum === cur.pageNum && ord === curOrdinal) pdfCurrentRange = r;
+      else all.push(r);
+    });
+  }
+  setFindHighlights(all, pdfCurrentRange);
+}
+
+// --- Navigation + count -----------------------------------------------------
+function gotoMatch(i: number): void {
+  if (findState.scope === "pdf") {
+    goToPdfMatch(i);
+  } else {
+    findState.index = i;
+    paintSummaryFind();
+  }
+}
+function findNext(): void {
+  if (!findState.count) return;
+  gotoMatch((findState.index + 1) % findState.count);
+}
+function findPrev(): void {
+  if (!findState.count) return;
+  gotoMatch((findState.index - 1 + findState.count) % findState.count);
+}
+
+function updateFindCount(): void {
+  if (findState.scope === "pdf" && pdfIndexBuilding && findState.query.trim()) {
+    findCount.textContent = "…";
+    findCount.title = "Indexing pages…";
+    findCount.classList.remove("none");
+    return;
+  }
+  findCount.title = "";
+  if (!findState.query.trim()) {
+    findCount.textContent = "";
+    findCount.classList.remove("none");
+    return;
+  }
+  if (!findState.count) {
+    findCount.textContent = "0/0";
+    findCount.classList.add("none");
+    return;
+  }
+  findCount.textContent = `${findState.index + 1}/${findState.count}`;
+  findCount.classList.remove("none");
+}
+
+// A newly-rendered PDF page (or a zoom that re-rendered visible pages) should show its matches.
+onPageRendered = () => {
+  if (!findState.open || findState.scope !== "pdf") return;
+  if (pdfRepaintTimer) clearTimeout(pdfRepaintTimer);
+  pdfRepaintTimer = setTimeout(repaintPdfFindHighlights, 60); // coalesce render bursts
+};
+
+// Right pane opened/closed: reposition, and drop a now-unsearchable summary scope back to the PDF.
+onSummaryToggle = () => {
+  if (!findState.open) return;
+  if (findState.scope === "summary" && !summaryOpen) {
+    findState.scope = "pdf";
+    resetFindResults();
+    runFindSearch();
+  }
+  updateFindScopeChip();
+  positionFindWidget();
+};
+
+// --- Keyboard + viewport ----------------------------------------------------
+window.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+    e.preventDefault();
+    // Follow the pane the user last interacted with — EXCEPT when they're already in the find box
+    // (clicking the input doesn't change activePane, so keep the current scope and just refocus).
+    const scope = document.activeElement === findInput ? findState.scope : scopeForActivePane();
+    openFind(scope);
+    return;
+  }
+  if (e.key === "Escape" && findState.open) closeFind();
+});
+window.addEventListener("resize", () => {
+  if (findState.open) positionFindWidget();
+});
 
 // Handshake: tell the host we're listening, so it posts bootstrap + summary.
 vscode.postMessage({ type: "ready" });

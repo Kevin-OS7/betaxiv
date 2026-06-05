@@ -1271,17 +1271,17 @@ svg.fig-image {
   opacity: 0.75;
 }
 
-/* --- Find in the right pane (summary / AIDocs) -----------------------------
-   Our own find widget, scoped to #summary-root, so it never matches the PDF
-   text layer in the left pane (the native webview find searches the whole DOM).
-   Matches are painted via the CSS Custom Highlight API — no DOM mutation, so it
-   coexists with the no-raw-innerHTML summary rendering. */
+/* --- Find (Ctrl+F): pane-aware in-page search ------------------------------
+   Our own find widget, replacing VS Code's native one. It scopes to the focused
+   pane: the PDF (left) searches every page; the summary / AIDocs (right) searches
+   #summary-root. Matches are painted via the CSS Custom Highlight API — no DOM
+   mutation, so it coexists with the no-raw-innerHTML rendering. JS positions it
+   (fixed) over the active pane; webview.ts owns the logic. */
 #bx-find {
-  position: sticky;
-  top: 8px;
+  position: fixed;
   z-index: 30;
-  margin-left: auto;          /* right-align within the pane */
   width: max-content;
+  max-width: calc(100vw - 24px);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1330,6 +1330,26 @@ svg.fig-image {
 }
 #bx-find button:hover {
   background: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.2));
+}
+#bx-find-input::placeholder {
+  color: var(--vscode-input-placeholderForeground, rgba(160, 160, 160, 0.7));
+}
+/* Scope chip — click to toggle PDF ⇄ summary. Reads like a badge; disabled when the summary
+   pane is closed (only the PDF can be searched then). */
+.bx-find-scope {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 6px !important;
+  border: 1px solid var(--vscode-badge-background, #4d4d4d) !important;
+  border-radius: 9px !important;
+  background: var(--vscode-badge-background, #4d4d4d) !important;
+  color: var(--vscode-badge-foreground, #fff) !important;
+}
+.bx-find-scope:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 ::highlight(bx-find) {

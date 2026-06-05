@@ -174,7 +174,11 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
     {
       enableScripts: true,
       retainContextWhenHidden: true,
-      enableFindWidget: true,
+      // The webview ships its own pane-aware find widget (Ctrl+F), so VS Code's native find is
+      // disabled: the native one searches the whole DOM (both panes at once) and, for the PDF,
+      // only ever sees the ~8 lazily-rendered pages. Ours scopes to the focused pane and searches
+      // every PDF page. See the "Find (Ctrl+F)" section in webview/webview.ts.
+      enableFindWidget: false,
       localResourceRoots: localRoots(context.extensionUri, pdfUri),
     }
   );
