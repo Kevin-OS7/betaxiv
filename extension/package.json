@@ -4,8 +4,16 @@
   "description": "Read papers in VS Code: real PDF on the left, an AI-generated structured summary on the right. The summary is produced by your own coding agent (Claude Code / Codex / Gemini CLI) via a bundled Agent Skill. The extension is a pure renderer — it never calls models, touches API keys, or launches agents.",
   "version": "0.1.0",
   "license": "MIT",
-  "publisher": "betaxiv",
+  "publisher": "kevin-os7",
   "icon": "media/betaxiv_logo.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kevin-OS7/betaxiv.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Kevin-OS7/betaxiv/issues"
+  },
+  "homepage": "https://github.com/Kevin-OS7/betaxiv#readme",
   "engines": {
     "vscode": "^1.96.0"
   },

@@ -6,7 +6,7 @@ AI-generated structured summary **plus any AIDocs** — extra documents (compari
 method flowcharts, derivations) your agent writes on demand. Both are written by **your own
 coding agent** (Claude Code / Codex / Gemini CLI) running a bundled Agent Skill. The
 extension itself is a **pure renderer** — it never calls a model, touches OAuth/API keys, or
-launches an agent. See [REQUIREMENTS.md](REQUIREMENTS.md) and [AGENTS.md](AGENTS.md).
+launches an agent. See [AGENTS.md](AGENTS.md).
 
 ## Layout
 

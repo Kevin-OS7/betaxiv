@@ -2,8 +2,7 @@
 
 Guidance for coding agents (Claude Code / Codex / Gemini CLI) working in this repo.
 `CLAUDE.md` and `GEMINI.md` are symlinks to this file. See [README.md](README.md) for the
-user-facing overview and [REQUIREMENTS.md](REQUIREMENTS.md) for the full product spec
-(Japanese).
+user-facing overview.
 
 ## What this is
 
