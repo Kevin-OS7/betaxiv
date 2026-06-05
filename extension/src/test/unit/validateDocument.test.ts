@@ -18,6 +18,15 @@ test("golden example.document.json validates (incl. table + diagram blocks)", ()
   assert.ok(types.includes("table"), "example should contain a table block");
   assert.ok(types.includes("diagram"), "example should contain a diagram block");
   assert.ok(types.includes("chart"), "example should contain a chart block");
+  assert.ok(types.includes("heading"), "example should contain a heading block");
+});
+
+test("heading block: bad level is rejected", () => {
+  const bad = clone(example) as unknown as { blocks: { type: string; level?: number }[] };
+  const h = bad.blocks.find((b) => b.type === "heading");
+  h!.level = 5;
+  const res = validateDocumentBytes(encode(bad));
+  assert.equal(res.valid, false);
 });
 
 test("chart block: bad axis scale is rejected", () => {

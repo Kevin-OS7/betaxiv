@@ -8,6 +8,7 @@
     "description": "Side-by-side params/BLEU table plus the encoder–decoder data flow."
   },
   "blocks": [
+    { "type": "heading", "text": "Overview", "level": 2 },
     {
       "type": "paragraph",
       "text": "A compact comparison of the **Transformer** against the recurrent and convolutional baselines it replaced, followed by the high-level data flow through the architecture."

@@ -34,6 +34,24 @@
           "additionalProperties": false,
           "required": ["type", "text"],
           "properties": {
+            "type": { "const": "heading" },
+            "text": {
+              "type": "string",
+              "description": "A section title. Use this for section/subsection headings — do NOT fake headings with a bold paragraph."
+            },
+            "level": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 3,
+              "description": "2 = section (default), 3 = subsection. The document title comes from doc.title (level 1); headings start at 2."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "text"],
+          "properties": {
             "type": { "const": "paragraph" },
             "text": {
               "type": "string",
