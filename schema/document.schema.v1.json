@@ -1,0 +1,319 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/betaxiv/betaxiv/schema/document.schema.v1.json",
+  "title": "BetaXiv Document (AIDoc)",
+  "description": "Versioned contract between the betaxiv-documenter skill (writer) and the BetaXiv VS Code extension (reader). An AIDoc is a lightweight, agent-authored artifact about a paper (a comparison table, a method flowchart, a derivation, …) shown alongside the summary. Both sides validate against this file. Unlike the summary, blocks may include declarative `table` and `diagram` (Mermaid) blocks — the agent declares, the extension renders. The extension never generates content or launches an agent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "doc", "blocks", "generatedBy"],
+  "$defs": {
+    "listItem": {
+      "description": "A list item: a plain string, or an object with nested sub-items (for tab-like indentation / outlines). Sub-lists may be ordered or unordered independently.",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text"],
+          "properties": {
+            "text": { "type": "string" },
+            "ordered": { "type": "boolean" },
+            "items": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/listItem" }
+            }
+          }
+        }
+      ]
+    },
+    "block": {
+      "description": "One ordered content block. paragraph/bullets/formula/figure behave exactly as in a summary; table and diagram are doc-only declarative blocks.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "text"],
+          "properties": {
+            "type": { "const": "paragraph" },
+            "text": {
+              "type": "string",
+              "description": "Flowing prose. Inline emphasis supported: **bold**, `code`, and inline math $…$ (KaTeX)."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "items"],
+          "properties": {
+            "type": { "const": "bullets" },
+            "ordered": {
+              "type": "boolean",
+              "description": "true → numbered (ordered) list; omitted/false → bulleted list."
+            },
+            "items": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/listItem" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "text"],
+          "properties": {
+            "type": { "const": "formula" },
+            "text": {
+              "type": "string",
+              "description": "A display equation written in LaTeX, rendered as real math via KaTeX (no $ delimiters; the body only). Use \\frac, ^, _, \\sqrt, \\sum, Greek (\\alpha), etc."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "label"],
+          "properties": {
+            "type": { "const": "figure" },
+            "label": {
+              "type": "string",
+              "description": "Must match a figures[].label; the extension crops that figure from the source PDF and renders it inline here."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "header", "rows"],
+          "properties": {
+            "type": { "const": "table" },
+            "caption": {
+              "type": ["string", "null"],
+              "description": "Optional table caption shown above the table."
+            },
+            "header": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Column headers. Cells support the same inline emphasis as paragraph text (**bold**, `code`, $math$)."
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "description": "Row-major cells. Each row is an array of string cells (inline markup allowed). Ragged rows are tolerated by the renderer."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "mermaid"],
+          "properties": {
+            "type": { "const": "diagram" },
+            "mermaid": {
+              "type": "string",
+              "description": "Mermaid diagram source, rendered to SVG client-side. Use ONLY built-in diagram types so nothing is lazily fetched under CSP: flowchart/graph, sequenceDiagram, classDiagram, stateDiagram, erDiagram, pie, xychart-beta. Use xychart-beta for BAR and simple line charts; for SCATTER plots, log axes, or error bars use a `chart` block instead. e.g. 'flowchart LR\\n  A[Input] --> B[Encoder] --> C[Decoder] --> D[Output]'."
+            },
+            "caption": {
+              "type": ["string", "null"],
+              "description": "Optional caption shown under the diagram."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "kind", "xAxis", "yAxis", "series"],
+          "description": "A scientific plot (scatter or numeric-x line) drawn by the extension as a crisp vector SVG from declarative data — supports log axes, error bars, multiple series, and a legend (what Mermaid's xychart cannot do). Use a `diagram` (xychart-beta) for categorical BAR charts instead.",
+          "properties": {
+            "type": { "const": "chart" },
+            "kind": {
+              "enum": ["scatter", "line"],
+              "description": "scatter: markers only. line: markers connected by a line, sorted by x."
+            },
+            "title": { "type": ["string", "null"] },
+            "caption": { "type": ["string", "null"] },
+            "alt": {
+              "type": ["string", "null"],
+              "description": "Plain-language description of the chart for accessibility."
+            },
+            "legend": {
+              "type": "boolean",
+              "description": "Show a series legend. Defaults to true when there is more than one series."
+            },
+            "xAxis": { "$ref": "#/$defs/chartAxis" },
+            "yAxis": { "$ref": "#/$defs/chartAxis" },
+            "series": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "items": { "$ref": "#/$defs/chartSeries" }
+            }
+          }
+        }
+      ]
+    },
+    "chartAxis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "scale"],
+      "properties": {
+        "label": { "type": "string" },
+        "scale": {
+          "enum": ["linear", "log"],
+          "description": "log requires strictly-positive values on that axis."
+        },
+        "domain": {
+          "description": "Axis range. Omit or use \"auto\" to derive it from the data (incl. error bars).",
+          "oneOf": [
+            { "const": "auto" },
+            {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": { "type": "number" }
+            }
+          ]
+        },
+        "tickCount": { "type": "integer", "minimum": 2, "maximum": 10 }
+      }
+    },
+    "chartErrorBar": {
+      "description": "Symmetric +/- error (a number) or an absolute interval {low, high} in data units. Use {low, high} on log axes so the interval never crosses zero.",
+      "oneOf": [
+        { "type": "number", "minimum": 0 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["low", "high"],
+          "properties": {
+            "low": { "type": "number" },
+            "high": { "type": "number" }
+          }
+        }
+      ]
+    },
+    "chartPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "label": { "type": ["string", "null"] },
+        "xError": { "$ref": "#/$defs/chartErrorBar" },
+        "yError": { "$ref": "#/$defs/chartErrorBar" }
+      }
+    },
+    "chartSeries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "points"],
+      "properties": {
+        "name": { "type": "string" },
+        "marker": {
+          "enum": ["circle", "square", "triangle", "diamond", "cross"],
+          "description": "Marker shape; defaults are auto-assigned per series so shape (not just color) distinguishes them."
+        },
+        "color": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$",
+          "description": "Optional series color as a hex code (#rgb or #rrggbb). Omit to use the auto-assigned palette color. Restricted to hex for safety."
+        },
+        "points": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "items": { "$ref": "#/$defs/chartPoint" }
+        }
+      }
+    },
+    "figure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "caption", "page", "bbox"],
+      "properties": {
+        "label": { "type": "string", "description": "e.g. Figure 1, Table 2." },
+        "caption": { "type": "string" },
+        "page": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "bbox": {
+          "type": ["array", "null"],
+          "minItems": 4,
+          "maxItems": 4,
+          "items": { "type": "number", "minimum": 0, "maximum": 1 },
+          "description": "Normalized [x0, y0, x1, y1] in 0..1, origin top-left, measured against the upright cropBox page (PDF.js `view`, rotation applied) — the same frame the extension renders and crops. Ground it on that page image (see the skill's crop_helper.py). Null if unknown (the extension then shows caption + page only)."
+        }
+      }
+    }
+  },
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Schema contract version. Pinned so reader and writer never silently diverge."
+    },
+    "doc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "kind", "sourcePath", "description"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "description": "Stable slug, unique within this paper's docs directory. Becomes the filename: .betaxiv/docs/<contentId>/<id>.doc.json."
+        },
+        "title": {
+          "type": "string",
+          "description": "Human title shown in the AIDocs dropdown and as the document heading."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Free-form category hint, e.g. note | report | comparison | derivation. Purely informational."
+        },
+        "sourcePath": {
+          "type": "string",
+          "description": "Path to the source PDF this doc is about, relative to the workspace root (e.g. papers/attention.pdf)."
+        },
+        "description": {
+          "type": ["string", "null"],
+          "description": "Optional one-line summary shown under the title in the dropdown. Required key, nullable value."
+        }
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "description": "Ordered content blocks rendered top-to-bottom. Figures appear inline via a figure block referencing a figures[] entry by label.",
+      "items": { "$ref": "#/$defs/block" }
+    },
+    "figures": {
+      "type": "array",
+      "description": "Optional catalog of figures/tables cropped from the SOURCE PDF (page + bbox). Same mechanism as summaries — the extension crops the real image; the agent never draws. External data must go in table/diagram blocks instead. May be omitted or [].",
+      "items": { "$ref": "#/$defs/figure" }
+    },
+    "generatedBy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "model", "timestamp"],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "The agent harness that produced this doc, e.g. Claude Code, Codex, Gemini CLI."
+        },
+        "model": {
+          "type": ["string", "null"],
+          "description": "Model identifier if known, else null."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of generation."
+        }
+      }
+    }
+  }
+}

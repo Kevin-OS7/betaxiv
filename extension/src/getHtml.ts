@@ -75,7 +75,7 @@ export function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): stri
     <div id="view-controls">
       <span id="summary-status" hidden></span>
       <button id="notes-toggle" aria-pressed="false" title="Search this PDF's notes &amp; highlights">Notes</button>
-      <button id="summary-toggle" aria-pressed="false" title="Show/hide summary">Summary</button>
+      <button id="aidocs-toggle" aria-haspopup="true" aria-expanded="false" title="Summary &amp; AI-generated docs">AIDocs ▾</button>
     </div>
     <div id="splitter" role="separator" aria-orientation="vertical" tabindex="0"></div>
     <section id="summary-pane" aria-label="Summary">

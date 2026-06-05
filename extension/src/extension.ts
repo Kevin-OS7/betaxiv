@@ -7,7 +7,8 @@
 import * as vscode from "vscode";
 import { getHtml } from "./getHtml";
 import { validateSummaryBytes } from "./validateSummary";
-import type { HostMessage, Annotation } from "./protocol";
+import { validateDocumentBytes } from "./validateDocument";
+import type { HostMessage, Annotation, PaperDoc } from "./protocol";
 import {
   mutateIndex,
   resolveContentId,
@@ -17,6 +18,9 @@ import {
 } from "./contentIndex";
 
 const SKILL_NAME = "betaxiv-summarizer";
+const DOCS_SKILL_NAME = "betaxiv-documenter";
+// Both bundled skills are installed together so the user's agent can summarize AND document.
+const SKILL_NAMES = [SKILL_NAME, DOCS_SKILL_NAME];
 
 // Agent Skills dirs we install into, relative to the workspace root. A single SKILL.md
 // works across Claude Code / Codex / Gemini CLI via the .agents/skills alias hub.
@@ -184,6 +188,14 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
     : undefined;
   const summaryRelPath = `.betaxiv/summaries/${keyId}.summary.json`;
 
+  // AIDocs: a directory of agent-authored documents for this paper, keyed by content id like
+  // the summary. The extension reads/validates/renders them and live-reloads on change — it
+  // never writes or generates them (same boundary as the summary).
+  const docsDirUri = workspaceFolder
+    ? vscode.Uri.joinPath(workspaceFolder.uri, ".betaxiv", "docs", keyId)
+    : undefined;
+  const docsRelGlob = `.betaxiv/docs/${keyId}/*.doc.json`;
+
   // Highlights + notes the user creates in the webview. The webview is the source of truth
   // during a session; the host just loads this once on open and writes it back on each edit
   // (same file boundary as the summary — the webview never touches the filesystem).
@@ -217,6 +229,42 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
     } else {
       post({ type: "summary-invalid", summaryRelPath, errors: result.errors });
     }
+  };
+
+  const sendDocs = async () => {
+    if (!docsDirUri) {
+      post({ type: "docs", docs: [], invalid: [], docsSkillName: DOCS_SKILL_NAME });
+      return;
+    }
+    let entries: [string, vscode.FileType][] = [];
+    try {
+      entries = await vscode.workspace.fs.readDirectory(docsDirUri);
+    } catch {
+      // Directory doesn't exist yet → no docs. The watcher picks up the first one written.
+      post({ type: "docs", docs: [], invalid: [], docsSkillName: DOCS_SKILL_NAME });
+      return;
+    }
+    const docs: PaperDoc[] = [];
+    const invalid: { relPath: string; errors: string[] }[] = [];
+    // Stable, predictable order in the dropdown regardless of filesystem listing order.
+    const files = entries
+      .filter(([name, type]) => type === vscode.FileType.File && name.endsWith(".doc.json"))
+      .map(([name]) => name)
+      .sort();
+    for (const name of files) {
+      const relPathStr = `.betaxiv/docs/${keyId}/${name}`;
+      try {
+        const bytes = await vscode.workspace.fs.readFile(
+          vscode.Uri.joinPath(docsDirUri, name)
+        );
+        const result = validateDocumentBytes(bytes);
+        if (result.valid && result.doc) docs.push(result.doc);
+        else invalid.push({ relPath: relPathStr, errors: result.errors });
+      } catch (err) {
+        invalid.push({ relPath: relPathStr, errors: [`Could not read: ${(err as Error).message}`] });
+      }
+    }
+    post({ type: "docs", docs, invalid, docsSkillName: DOCS_SKILL_NAME });
   };
 
   const sendAnnotations = async () => {
@@ -263,6 +311,7 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
           standardFontUri: vendor("standard_fonts") + "/",
         });
         void sendSummary();
+        void sendDocs();
         void sendAnnotations();
       } else if (msg?.type === "annotations-save") {
         void saveAnnotations(Array.isArray(msg.annotations) ? msg.annotations : []);
@@ -293,6 +342,26 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
         if (debounce) clearTimeout(debounce);
       })
     );
+
+    // Live-reload the AIDocs set on any add/change/delete in the docs dir. We re-read the
+    // whole directory each time (it's small) so the dropdown always reflects what's on disk.
+    const docsWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(workspaceFolder, docsRelGlob)
+    );
+    let docsDebounce: ReturnType<typeof setTimeout> | undefined;
+    const onDocsChange = () => {
+      if (docsDebounce) clearTimeout(docsDebounce);
+      docsDebounce = setTimeout(() => void sendDocs(), 150);
+    };
+    docsWatcher.onDidCreate(onDocsChange);
+    docsWatcher.onDidChange(onDocsChange);
+    docsWatcher.onDidDelete(onDocsChange);
+    disposables.push(
+      docsWatcher,
+      new vscode.Disposable(() => {
+        if (docsDebounce) clearTimeout(docsDebounce);
+      })
+    );
   }
 
   panel.onDidDispose(() => {
@@ -315,46 +384,46 @@ function localRoots(extensionUri: vscode.Uri, pdfUri: vscode.Uri): vscode.Uri[] 
 }
 
 /**
- * Copy the bundled betaxiv-summarizer skill into the workspace's agent skill dirs so the
- * user's own agent can run it. This writes files only — it never launches an agent
- * (rule 2). The human triggers the agent themselves afterward.
+ * Copy the bundled BetaXiv skills (betaxiv-summarizer + betaxiv-documenter) into the
+ * workspace's agent skill dirs so the user's own agent can run them. This writes files only
+ * — it never launches an agent (rule 2). The human triggers the agent themselves afterward.
  */
 async function installSkill(context: vscode.ExtensionContext): Promise<void> {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceFolder) {
     void vscode.window.showErrorMessage(
-      "BetaXiv: open a folder/workspace first to install the skill into it."
+      "BetaXiv: open a folder/workspace first to install the skills into it."
     );
     return;
   }
 
-  const source = vscode.Uri.joinPath(
-    context.extensionUri,
-    "assets",
-    "skill",
-    SKILL_NAME
-  );
-  try {
-    await vscode.workspace.fs.stat(source);
-  } catch {
-    void vscode.window.showErrorMessage(
-      "BetaXiv: bundled skill assets are missing from this build."
-    );
-    return;
+  // Verify every bundled skill is present before writing anything.
+  const sources = new Map<string, vscode.Uri>();
+  for (const name of SKILL_NAMES) {
+    const source = vscode.Uri.joinPath(context.extensionUri, "assets", "skill", name);
+    try {
+      await vscode.workspace.fs.stat(source);
+    } catch {
+      void vscode.window.showErrorMessage(
+        `BetaXiv: bundled skill assets for ${name} are missing from this build.`
+      );
+      return;
+    }
+    sources.set(name, source);
   }
 
-  const written: string[] = [];
   for (const dir of SKILL_TARGET_DIRS) {
     // Create the parent dir tree first — fs.copy does not reliably create missing
     // intermediates, and a fresh workspace has none of these dirs.
     await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(workspaceFolder.uri, dir));
-    const target = vscode.Uri.joinPath(workspaceFolder.uri, dir, SKILL_NAME);
-    await vscode.workspace.fs.copy(source, target, { overwrite: true });
-    written.push(`${dir}/${SKILL_NAME}`);
+    for (const [name, source] of sources) {
+      const target = vscode.Uri.joinPath(workspaceFolder.uri, dir, name);
+      await vscode.workspace.fs.copy(source, target, { overwrite: true });
+    }
   }
 
   void vscode.window.showInformationMessage(
-    `BetaXiv: installed the ${SKILL_NAME} skill into ${written.join(", ")}. ` +
-      `Run it with your own agent on a PDF in papers/.`
+    `BetaXiv: installed the ${SKILL_NAMES.join(" + ")} skills into ${SKILL_TARGET_DIRS.join(", ")}. ` +
+      `Run them with your own agent on a PDF in papers/.`
   );
 }

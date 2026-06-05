@@ -53,7 +53,7 @@ body {
   gap: 8px;
 }
 
-#summary-toggle,
+#aidocs-toggle,
 #notes-toggle {
   cursor: pointer;
   border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.5));
@@ -67,12 +67,12 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
 }
 
-#summary-toggle:hover,
+#aidocs-toggle:hover,
 #notes-toggle:hover {
   background: var(--vscode-button-secondaryHoverBackground, #45494e);
 }
 
-#summary-toggle[aria-pressed="true"],
+#aidocs-toggle[aria-pressed="true"],
 #notes-toggle[aria-pressed="true"] {
   background: var(--vscode-button-background, #0e639c);
   color: var(--vscode-button-foreground, #fff);
@@ -760,6 +760,16 @@ figure.fig.fig-active {
   background: #fff;
 }
 
+/* Mermaid diagrams are vector SVGs (not raster crops). Mermaid's "neutral" theme renders dark
+   text on light fills, so a backdrop is needed for legibility on a dark UI — but a stark #fff
+   box is harsh. Give diagrams a soft, calming backdrop with some breathing room instead.
+   (PDF crops keep the white "paper" look above; only svg.fig-image is overridden here.) */
+svg.fig-image {
+  background: #e3ecf8;
+  padding: 12px 14px;
+  border-radius: 6px;
+}
+
 .figure-loading {
   font-size: 0.85em;
   color: var(--vscode-descriptionForeground);
@@ -880,4 +890,239 @@ figure.fig.fig-active {
 .errors ul {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 0.85em;
+}
+
+/* --- AIDocs dropdown menu (anchored under the AIDocs button) ---------------- */
+#aidocs-menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 220px;
+  max-width: 340px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 6px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background, #252526));
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.4)));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+#aidocs-menu[hidden] {
+  display: none;
+}
+
+.aidocs-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  background: transparent;
+  color: inherit;
+}
+
+.aidocs-item:hover {
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.18)));
+  color: var(--vscode-menu-selectionForeground, inherit);
+}
+
+.aidocs-item.active {
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #fff);
+}
+
+.aidocs-item-title {
+  font-weight: 600;
+}
+
+.aidocs-item-desc {
+  font-size: 11px;
+  opacity: 0.75;
+  line-height: 1.3;
+}
+
+.aidocs-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+  border: 1px solid var(--vscode-inputValidation-errorBorder, rgba(255, 100, 100, 0.5));
+}
+
+.aidocs-item.invalid .aidocs-item-title {
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.aidocs-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--vscode-menu-separatorBackground, rgba(128, 128, 128, 0.3));
+}
+
+.aidocs-new .aidocs-item-title {
+  color: var(--vscode-textLink-foreground, #3794ff);
+}
+
+/* --- Transient toast (e.g. "prompt copied") -------------------------------- */
+#betaxiv-toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  z-index: 30;
+  max-width: 70vw;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--vscode-notifications-background, #2d2d2d);
+  color: var(--vscode-notifications-foreground, #fff);
+  border: 1px solid var(--vscode-notifications-border, rgba(128, 128, 128, 0.4));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+#betaxiv-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* --- AIDoc table block ----------------------------------------------------- */
+.block-table {
+  margin: 1.2em 0;
+  overflow-x: auto;
+}
+
+.block-table table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9em;
+}
+
+.block-table th,
+.block-table td {
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+  padding: 5px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.block-table thead th {
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.12));
+  font-weight: 600;
+}
+
+.block-table tbody tr:nth-child(even) {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.06));
+}
+
+.block-table figcaption {
+  margin-top: 6px;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* --- AIDoc diagram block (Mermaid SVG) -------------------------------------
+   Diagrams reuse the figure shell (.fig / .fig-image-holder / .fig-image / .fig-zoom-bar) so
+   they get the SAME per-figure zoom as cropped figures. Mermaid labels are SVG <text>
+   (htmlLabels:false) — no <foreignObject>, so they size via getBBox and center accurately.
+   Only the <pre> fallback (shown if a diagram fails to render) needs its own style here. */
+.diagram-src {
+  text-align: left;
+  white-space: pre-wrap;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.82em;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+}
+
+/* --- AIDoc chart block (hand-rolled scatter/line SVG) ----------------------
+   The chart SVG is a .fig-image (sits on the soft-blue backdrop, zooms with the figure shell).
+   Series <g>s carry `color:<palette>` so markers/lines use currentColor; axes/text use a fixed
+   dark ink that's legible on the light backdrop regardless of the VS Code theme. */
+.chart-svg {
+  --chart-ink: #1f2733;
+  --chart-grid: rgba(31, 39, 51, 0.14);
+  font-family: -apple-system, "Segoe UI", Roboto, Ubuntu, system-ui, sans-serif;
+}
+
+.chart-frame {
+  fill: none;
+  stroke: var(--chart-ink);
+  stroke-width: 1;
+}
+
+.chart-grid {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+}
+
+.chart-tick {
+  fill: var(--chart-ink);
+  font-size: 12px;
+}
+
+.chart-axis-label {
+  fill: var(--chart-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chart-title {
+  fill: var(--chart-ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.chart-legend {
+  fill: var(--chart-ink);
+  font-size: 12px;
+}
+
+.chart-note {
+  fill: var(--chart-ink);
+  opacity: 0.7;
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* Series glyphs use the group's currentColor (set inline per series from the palette). */
+.chart-marker {
+  fill: currentColor;
+  stroke: #fff;
+  stroke-width: 0.8;
+}
+
+.chart-marker-stroke {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+.chart-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+.chart-err {
+  stroke: currentColor;
+  stroke-width: 1;
+  opacity: 0.75;
 }

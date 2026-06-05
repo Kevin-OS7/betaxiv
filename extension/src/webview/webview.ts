@@ -6,13 +6,18 @@ import katex from "katex";
 import type {
   HostMessage,
   PaperSummary,
-  Block,
+  PaperDoc,
+  DocBlock,
+  TableBlock,
+  DiagramBlock,
+  ChartBlock,
   Figure,
   ListItem,
   Annotation,
   AnnotationRect,
 } from "../protocol";
 import { normalizeBbox, sourceRect } from "./cropGeometry";
+import { renderChartSvg } from "./chart";
 import {
   AnnotationStore,
   ANNOTATION_COLORS,
@@ -31,6 +36,44 @@ interface VsCodeApi {
 declare function acquireVsCodeApi(): VsCodeApi;
 
 const vscode = acquireVsCodeApi();
+
+// Mermaid renders AIDoc `diagram` blocks to SVG client-side (the agent only declares source).
+// It's ESM-only, so we import it dynamically (esbuild bundles it for the webview; the CJS
+// typecheck stays happy) and lazily — papers without a diagram never pay its load cost. It's
+// initialized once: startOnLoad:false → we call render() ourselves; securityLevel:"strict"
+// sanitizes labels and blocks script/click-handler injection. Only built-in diagram types are
+// used (see the betaxiv-documenter skill), so nothing is lazily fetched — CSP-clean + offline.
+// Minimal surface of the Mermaid API we use (a full ESM type-import would need a
+// resolution-mode attribute under Node16; this avoids that and documents our usage).
+interface MermaidApi {
+  initialize(config: Record<string, unknown>): void;
+  render(id: string, text: string): Promise<{ svg: string }>;
+}
+let mermaidPromise: Promise<MermaidApi> | undefined;
+function loadMermaid(): Promise<MermaidApi> {
+  if (!mermaidPromise) {
+    mermaidPromise = import("mermaid").then((mod) => {
+      const m = (mod as { default: MermaidApi }).default;
+      m.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: "neutral",
+        // Pin a font that actually exists on the host (Mermaid's default "trebuchet ms" is
+        // absent on Linux/webview).
+        fontFamily: '-apple-system, "Segoe UI", Roboto, Ubuntu, system-ui, sans-serif',
+        // htmlLabels:false → labels are SVG <text> (text-anchor:middle), sized via getBBox and
+        // centered accurately. This avoids Mermaid's <foreignObject> labels, whose width drifts
+        // in a webview (canvas vs DOM metrics) and both clipped and mis-centered the text.
+        htmlLabels: false,
+        // Don't stretch flowcharts to the full column width (the default); render at natural
+        // size and let the figure-zoom CSS scale them like summary figures.
+        flowchart: { useMaxWidth: false, htmlLabels: false },
+      });
+      return m;
+    });
+  }
+  return mermaidPromise;
+}
 
 const pdfStatus = document.getElementById("pdf-status") as HTMLElement;
 const pdfPages = document.getElementById("pdf-pages") as HTMLElement;
@@ -66,6 +109,26 @@ function saveState(patch: Partial<SavedState>): void {
   vscode.setState({ ...cur, ...patch });
 }
 
+// --- AIDocs state -----------------------------------------------------------
+// The right pane shows ONE artifact at a time, chosen from the AIDocs dropdown: the special
+// Summary, or one of the agent-authored docs. The host streams each independently, so we keep
+// the latest of each and (re)render whatever is currently selected.
+type SummaryState =
+  | { kind: "waiting" }
+  | { kind: "ready"; summary: PaperSummary }
+  | { kind: "missing"; relPath: string; skillName: string }
+  | { kind: "invalid"; relPath: string; errors: string[] };
+type Selection =
+  | { kind: "summary" }
+  | { kind: "doc"; id: string }
+  | { kind: "invalid"; relPath: string };
+
+let summaryState: SummaryState = { kind: "waiting" };
+let docsState: PaperDoc[] = [];
+let docsInvalidState: { relPath: string; errors: string[] }[] = [];
+let docsSkillName = "betaxiv-documenter";
+let selection: Selection = { kind: "summary" };
+
 window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
   const msg = event.data;
   switch (msg.type) {
@@ -80,16 +143,25 @@ window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
       );
       break;
     case "summary":
-      renderSummary(msg.summary);
+      summaryState = { kind: "ready", summary: msg.summary };
       setSummaryStatus("ready");
+      refreshAidocs();
       break;
     case "summary-missing":
-      renderGuidance(msg.summaryRelPath, msg.skillName);
+      summaryState = { kind: "missing", relPath: msg.summaryRelPath, skillName: msg.skillName };
       setSummaryStatus("missing");
+      refreshAidocs();
       break;
     case "summary-invalid":
-      renderInvalid(msg.summaryRelPath, msg.errors);
+      summaryState = { kind: "invalid", relPath: msg.summaryRelPath, errors: msg.errors };
       setSummaryStatus("invalid");
+      refreshAidocs();
+      break;
+    case "docs":
+      docsState = msg.docs;
+      docsInvalidState = msg.invalid;
+      docsSkillName = msg.docsSkillName;
+      refreshAidocs();
       break;
     case "annotations":
       annoStore.setAll(msg.annotations);
@@ -109,22 +181,23 @@ pdfPane.addEventListener("scroll", () => {
 // --- Summary pane: collapsible + resizable splitter -------------------------
 const app = document.getElementById("app") as HTMLElement;
 const splitter = document.getElementById("splitter") as HTMLElement;
-const summaryToggle = document.getElementById("summary-toggle") as HTMLButtonElement;
+const aidocsToggle = document.getElementById("aidocs-toggle") as HTMLButtonElement;
 const summaryStatus = document.getElementById("summary-status") as HTMLElement;
 
 const viewState = (vscode.getState() as SavedState) ?? {};
 if (viewState.splitCols) app.style.setProperty("--split-cols", viewState.splitCols);
 
-// Summary is collapsed by default; the user opens it with the toggle (choice persists).
+// The right pane is collapsed by default; opening it is driven by the AIDocs dropdown (and the
+// pane stays open across selections). The choice persists. setSummaryOpen only owns the pane's
+// visibility; the AIDocs button owns the dropdown menu (see the AIDocs section below).
 let summaryOpen = viewState.summaryOpen ?? false;
 function setSummaryOpen(open: boolean): void {
   summaryOpen = open;
   app.classList.toggle("summary-open", open);
-  summaryToggle.setAttribute("aria-pressed", String(open));
+  aidocsToggle.setAttribute("aria-pressed", String(open));
   saveState({ summaryOpen: open });
 }
 setSummaryOpen(summaryOpen);
-summaryToggle.addEventListener("click", () => setSummaryOpen(!summaryOpen));
 
 // --- Summary text zoom (independent of the PDF zoom) ------------------------
 // Scales only the summary pane's base font-size via the --summary-zoom CSS var; the
@@ -819,12 +892,190 @@ function renderList(items: ListItem[], ordered: boolean): HTMLElement {
   return list;
 }
 
+// Build a declarative data table (AIDoc `table` block). Cells carry the same inline emphasis
+// as paragraphs (**bold**, `code`, $math$) via inline(), so no raw innerHTML touches agent text.
+function renderTable(b: TableBlock): HTMLElement {
+  const figure = el("figure", "block-table");
+  const table = document.createElement("table");
+  if (b.header && b.header.length) {
+    const thead = document.createElement("thead");
+    const tr = document.createElement("tr");
+    for (const h of b.header) {
+      const th = document.createElement("th");
+      inline(h, th);
+      tr.appendChild(th);
+    }
+    thead.appendChild(tr);
+    table.appendChild(thead);
+  }
+  const tbody = document.createElement("tbody");
+  for (const row of b.rows ?? []) {
+    const tr = document.createElement("tr");
+    for (const cell of row) {
+      const td = document.createElement("td");
+      inline(cell, td);
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  figure.appendChild(table);
+  if (b.caption) {
+    const cap = document.createElement("figcaption");
+    inline(b.caption, cap);
+    figure.appendChild(cap);
+  }
+  return figure;
+}
+
+// Each Mermaid render needs a DOM id unique within the document; a monotonic counter avoids
+// collisions across re-renders (Date.now()/random are intentionally avoided in this codebase).
+let diagramSeq = 0;
+
+// The page CSP nonce, read off any nonced element (the .nonce IDL property returns the real
+// value even though the attribute is blanked in the DOM). Cached after first lookup.
+let cachedNonce: string | undefined;
+function pageNonce(): string {
+  if (cachedNonce === undefined) {
+    cachedNonce = document.querySelector<HTMLElement>("[nonce]")?.nonce ?? "";
+  }
+  return cachedNonce;
+}
+
+// Insert Mermaid's SVG into `holder`. Two jobs:
+//  1. CSP: Mermaid emits a `<style>` INSIDE the SVG (its scoped theme CSS); under our
+//     nonce-locked style-src that element would be blocked and the diagram render unstyled. We
+//     parse the markup in an inert <template> (never CSP-evaluated) and swap each <style> for a
+//     fresh one stamped with the page nonce. Inline style="…" attributes are already allowed by
+//     style-src-attr 'unsafe-inline' (see getHtml).
+//  2. Sizing: strip Mermaid's inline width/height and tag the <svg> as a `.fig-image` carrying
+//     its natural width in --fig-w, so it scales with the per-figure + summary zoom exactly like
+//     a cropped figure image (same CSS rule).
+function injectMermaidSvg(holder: HTMLElement, svg: string): void {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = svg; // template content is inert: parsed but not rendered / not CSP-checked
+  const nonce = pageNonce();
+  tpl.content.querySelectorAll("style").forEach((s) => {
+    const fresh = document.createElement("style");
+    if (nonce) fresh.nonce = nonce;
+    fresh.textContent = s.textContent ?? "";
+    s.replaceWith(fresh);
+  });
+  const svgEl = tpl.content.querySelector("svg");
+  if (svgEl) {
+    const vb = svgEl.getAttribute("viewBox");
+    const naturalW = vb ? parseFloat(vb.split(/[ ,]+/)[2]) : NaN;
+    svgEl.removeAttribute("width");
+    svgEl.removeAttribute("height");
+    svgEl.style.removeProperty("max-width");
+    svgEl.classList.add("fig-image");
+    if (Number.isFinite(naturalW)) svgEl.style.setProperty("--fig-w", `${Math.ceil(naturalW)}px`);
+  }
+  holder.replaceChildren(tpl.content);
+}
+
+// Render an AIDoc `diagram` block. It reuses the SAME `.fig` shell + per-figure zoom as cropped
+// figures (slider, click-to-focus, Ctrl/Cmd+scroll, summary-zoom lockstep) — `key` is a stable
+// per-diagram id so the zoom persists across live-reloads. Mermaid source -> SVG is injected
+// async; on a parse/render error we fall back to the verbatim source in a <pre> (graceful
+// degrade, like renderMath), so a slightly-off diagram still reads instead of breaking the pane.
+function renderDiagram(b: DiagramBlock, key: string): HTMLElement {
+  const figure = el("figure", "fig");
+  figure.dataset.figLabel = key;
+  const initialZoom = getFigZoom(key);
+  figure.style.setProperty("--fig-zoom", String(initialZoom));
+
+  const holder = el("div", "fig-image-holder");
+  holder.title = "Click to focus, then Ctrl/Cmd + scroll — or drag the slider — to zoom";
+  holder.addEventListener("click", () => toggleActiveFigure(figure));
+  holder.appendChild(el("div", "figure-loading", "Rendering diagram…"));
+  figure.appendChild(holder);
+
+  // Per-figure zoom slider (identical to renderFigure's).
+  const bar = el("div", "fig-zoom-bar");
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.className = "fig-zoom-slider";
+  slider.min = String(FIG_MIN_ZOOM);
+  slider.max = String(FIG_MAX_ZOOM);
+  slider.step = "0.05";
+  slider.value = String(initialZoom);
+  slider.setAttribute("aria-label", `Zoom diagram`);
+  slider.addEventListener("input", () => setFigureZoom(figure, parseFloat(slider.value) || 1));
+  bar.appendChild(slider);
+  bar.appendChild(el("span", "fig-zoom-pct", `${Math.round(initialZoom * 100)}%`));
+  figure.appendChild(bar);
+
+  if (b.caption) {
+    const cap = document.createElement("figcaption");
+    inline(b.caption, cap);
+    figure.appendChild(cap);
+  }
+
+  const id = `mermaid-${diagramSeq++}`;
+  loadMermaid()
+    .then((m) => m.render(id, b.mermaid))
+    .then(({ svg }) => {
+      if (!holder.isConnected) return; // a live-reload may have replaced the pane already
+      injectMermaidSvg(holder, svg);
+    })
+    .catch(() => {
+      holder.replaceChildren(el("pre", "diagram-src", b.mermaid));
+    });
+  return figure;
+}
+
+// Render an AIDoc `chart` block (scatter / numeric-x line). Like renderDiagram it reuses the
+// `.fig` zoom shell, but the SVG is built synchronously and CSP-safely (createElementNS, no
+// innerHTML) by ./chart. An undrawable spec degrades to an inline message inside the shell.
+function renderChart(b: ChartBlock, key: string): HTMLElement {
+  const figure = el("figure", "fig");
+  figure.dataset.figLabel = key;
+  const initialZoom = getFigZoom(key);
+  figure.style.setProperty("--fig-zoom", String(initialZoom));
+
+  const holder = el("div", "fig-image-holder");
+  holder.title = "Click to focus, then Ctrl/Cmd + scroll — or drag the slider — to zoom";
+  holder.addEventListener("click", () => toggleActiveFigure(figure));
+  try {
+    holder.appendChild(renderChartSvg(b));
+  } catch (err) {
+    holder.appendChild(
+      el("div", "diagram-src", `Chart could not be rendered: ${(err as Error).message}`)
+    );
+  }
+  figure.appendChild(holder);
+
+  // Per-figure zoom slider (identical to figures/diagrams).
+  const bar = el("div", "fig-zoom-bar");
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.className = "fig-zoom-slider";
+  slider.min = String(FIG_MIN_ZOOM);
+  slider.max = String(FIG_MAX_ZOOM);
+  slider.step = "0.05";
+  slider.value = String(initialZoom);
+  slider.setAttribute("aria-label", "Zoom chart");
+  slider.addEventListener("input", () => setFigureZoom(figure, parseFloat(slider.value) || 1));
+  bar.appendChild(slider);
+  bar.appendChild(el("span", "fig-zoom-pct", `${Math.round(initialZoom * 100)}%`));
+  figure.appendChild(bar);
+
+  if (b.caption) {
+    const cap = document.createElement("figcaption");
+    inline(b.caption, cap);
+    figure.appendChild(cap);
+  }
+  return figure;
+}
+
 function renderBlocks(
-  blocks: Block[],
+  blocks: DocBlock[],
   figuresByLabel: Map<string, Figure>,
-  parent: HTMLElement
+  parent: HTMLElement,
+  keyPrefix = ""
 ): void {
-  for (const b of blocks) {
+  blocks.forEach((b, i) => {
     if (b.type === "paragraph") {
       const p = el("p", "block-para");
       inline(b.text, p);
@@ -839,8 +1090,15 @@ function renderBlocks(
       const fig = figuresByLabel.get(b.label);
       if (fig) parent.appendChild(renderFigure(fig));
       else parent.appendChild(el("div", "fig-missing", `[${b.label}]`));
+    } else if (b.type === "table") {
+      parent.appendChild(renderTable(b));
+    } else if (b.type === "diagram") {
+      // Stable per-diagram key (prefix = doc id) so its zoom persists across live-reloads.
+      parent.appendChild(renderDiagram(b, `${keyPrefix}::diagram::${i}`));
+    } else if (b.type === "chart") {
+      parent.appendChild(renderChart(b, `${keyPrefix}::chart::${i}`));
     }
-  }
+  });
 }
 
 function renderSummary(s: PaperSummary): void {
@@ -1005,6 +1263,246 @@ function renderInvalid(summaryRelPath: string, errors: string[]): void {
   card.appendChild(listOf(errors));
   summaryRoot.className = "";
   summaryRoot.replaceChildren(card);
+}
+
+// Render an AIDoc into the right pane. Reuses the summary block/figure pipeline wholesale —
+// the only differences are the header (title/kind/description) and that figures come from the
+// doc's own (optional) catalog.
+function renderDoc(d: PaperDoc): void {
+  setActiveFigure(null); // figures are about to be rebuilt; drop any stale focus
+  const root = document.createElement("div");
+  const figures = d.figures ?? [];
+  const figuresByLabel = new Map(figures.map((f) => [f.label, f]));
+
+  const header = el("div", "summary-header");
+  header.appendChild(el("h1", undefined, d.doc.title));
+  if (d.doc.description) header.appendChild(el("div", "summary-date", d.doc.description));
+  if (d.doc.kind) header.appendChild(el("div", "summary-meta", d.doc.kind));
+  root.appendChild(header);
+
+  const body = el("div", "section-block");
+  renderBlocks(d.blocks, figuresByLabel, body, d.doc.id);
+  root.appendChild(body);
+
+  // Safety net: any catalog figure never referenced inline still shows in a trailing list.
+  const referenced = new Set<string>();
+  for (const b of d.blocks) if (b.type === "figure") referenced.add(b.label);
+  const leftover = figures.filter((f) => !referenced.has(f.label));
+  if (leftover.length) {
+    const sec = section("Figures & Tables");
+    for (const fig of leftover) sec.appendChild(renderFigure(fig));
+    root.appendChild(sec);
+  }
+
+  const gb = d.generatedBy;
+  const footer = el(
+    "div",
+    "summary-meta",
+    `Generated by ${gb.agent}${gb.model ? ` (${gb.model})` : ""} · ${gb.timestamp}`
+  );
+  footer.style.marginTop = "24px";
+  root.appendChild(footer);
+
+  summaryRoot.className = "";
+  summaryRoot.replaceChildren(root);
+}
+
+function renderDocErrors(relPath: string, errors: string[]): void {
+  const card = el("div", "guidance errors");
+  card.appendChild(el("h2", undefined, "Document failed schema validation"));
+  card.appendChild(el("p", undefined, `File: ${relPath}`));
+  card.appendChild(listOf(errors));
+  summaryRoot.className = "";
+  summaryRoot.replaceChildren(card);
+}
+
+// --- AIDocs dropdown --------------------------------------------------------
+// The AIDocs button opens a menu anchored beneath it: row 1 is the Summary (or its
+// "Not yet summarized" label), the rest are agent-authored docs plus any that failed
+// validation. Selecting a row opens the right pane and renders that artifact; re-selecting the
+// active row while the pane is open collapses it (preserves the old single-button toggle feel).
+const aidocsMenu = document.createElement("div");
+aidocsMenu.id = "aidocs-menu";
+aidocsMenu.hidden = true;
+aidocsMenu.setAttribute("role", "menu");
+// Keep clicks inside the menu from reaching the global dismiss handlers.
+aidocsMenu.addEventListener("mousedown", (e) => e.stopPropagation());
+document.body.appendChild(aidocsMenu);
+
+function aidocsMenuOpen(): boolean {
+  return !aidocsMenu.hidden;
+}
+
+function positionAidocsMenu(): void {
+  const r = aidocsToggle.getBoundingClientRect();
+  aidocsMenu.style.top = `${Math.round(r.bottom + 6)}px`;
+  // The view controls sit at the top-right, so right-align the menu to the button.
+  aidocsMenu.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+}
+
+function setAidocsMenuOpen(open: boolean): void {
+  aidocsMenu.hidden = !open;
+  aidocsToggle.setAttribute("aria-expanded", String(open));
+  if (open) {
+    positionAidocsMenu();
+    renderAidocsMenu();
+  }
+}
+
+// stopPropagation on mousedown so the document-level "click outside closes" handler below
+// doesn't fire for the toggle itself (which would close-then-reopen on the following click).
+aidocsToggle.addEventListener("mousedown", (e) => e.stopPropagation());
+aidocsToggle.addEventListener("click", (e) => {
+  e.stopPropagation();
+  setAidocsMenuOpen(aidocsMenu.hidden);
+});
+document.addEventListener("mousedown", () => {
+  if (aidocsMenuOpen()) setAidocsMenuOpen(false);
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && aidocsMenuOpen()) setAidocsMenuOpen(false);
+});
+
+function sameSelection(a: Selection, b: Selection): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "doc" && b.kind === "doc") return a.id === b.id;
+  if (a.kind === "invalid" && b.kind === "invalid") return a.relPath === b.relPath;
+  return true; // both summary
+}
+
+function selectArtifact(sel: Selection): void {
+  // Re-selecting the active artifact while the pane is open collapses it (toggle feel).
+  if (summaryOpen && sameSelection(sel, selection)) {
+    setSummaryOpen(false);
+    setAidocsMenuOpen(false);
+    return;
+  }
+  selection = sel;
+  setSummaryOpen(true);
+  setAidocsMenuOpen(false);
+  renderSelection();
+}
+
+// Render whatever artifact is currently selected into the right pane. Falls back to the
+// Summary if a previously-selected doc/invalid entry has since disappeared.
+function renderSelection(): void {
+  if (selection.kind === "doc") {
+    const id = selection.id; // capture before the callback (TS won't narrow a mutable `let`)
+    const doc = docsState.find((d) => d.doc.id === id);
+    if (doc) {
+      renderDoc(doc);
+      return;
+    }
+    selection = { kind: "summary" };
+  } else if (selection.kind === "invalid") {
+    const relPath = selection.relPath;
+    const bad = docsInvalidState.find((x) => x.relPath === relPath);
+    if (bad) {
+      renderDocErrors(bad.relPath, bad.errors);
+      return;
+    }
+    selection = { kind: "summary" };
+  }
+  // Summary (the default / fallback).
+  if (summaryState.kind === "ready") renderSummary(summaryState.summary);
+  else if (summaryState.kind === "missing") renderGuidance(summaryState.relPath, summaryState.skillName);
+  else if (summaryState.kind === "invalid") renderInvalid(summaryState.relPath, summaryState.errors);
+  // "waiting" → leave the initial "Waiting for summary…" placeholder.
+}
+
+// Called whenever summary or docs state changes: keep the pane and (if open) the menu current.
+function refreshAidocs(): void {
+  renderSelection();
+  if (aidocsMenuOpen()) renderAidocsMenu();
+}
+
+function aidocsItem(active: boolean, extraClass?: string): HTMLButtonElement {
+  const row = document.createElement("button");
+  row.className = "aidocs-item" + (extraClass ? ` ${extraClass}` : "") + (active ? " active" : "");
+  row.setAttribute("role", "menuitem");
+  return row;
+}
+
+function renderAidocsMenu(): void {
+  const frag = document.createDocumentFragment();
+
+  // Row 1: the special Summary.
+  const summaryRow = aidocsItem(selection.kind === "summary");
+  const sumLabel = summaryState.kind === "missing" ? "Not yet summarized" : "Summary";
+  summaryRow.appendChild(el("span", "aidocs-item-title", sumLabel));
+  if (summaryState.kind === "invalid") summaryRow.appendChild(el("span", "aidocs-badge", "invalid"));
+  summaryRow.addEventListener("click", () => selectArtifact({ kind: "summary" }));
+  frag.appendChild(summaryRow);
+
+  // Agent-authored docs.
+  for (const d of docsState) {
+    const row = aidocsItem(selection.kind === "doc" && selection.id === d.doc.id);
+    row.appendChild(el("span", "aidocs-item-title", d.doc.title));
+    if (d.doc.description) row.appendChild(el("span", "aidocs-item-desc", d.doc.description));
+    row.addEventListener("click", () => selectArtifact({ kind: "doc", id: d.doc.id }));
+    frag.appendChild(row);
+  }
+
+  // Docs that failed validation — selectable so the user can see the errors.
+  for (const bad of docsInvalidState) {
+    const row = aidocsItem(selection.kind === "invalid" && selection.relPath === bad.relPath, "invalid");
+    row.appendChild(el("span", "aidocs-item-title", bad.relPath.split("/").pop() ?? bad.relPath));
+    row.appendChild(el("span", "aidocs-badge", "invalid"));
+    row.addEventListener("click", () => selectArtifact({ kind: "invalid", relPath: bad.relPath }));
+    frag.appendChild(row);
+  }
+
+  frag.appendChild(el("div", "aidocs-sep"));
+
+  // "+ New doc…": copies a prompt template to the clipboard. It NEVER launches an agent — the
+  // human pastes it into their own agent, same human-trigger boundary as the summary skill.
+  const newRow = aidocsItem(false, "aidocs-new");
+  newRow.appendChild(el("span", "aidocs-item-title", "+ New doc…"));
+  newRow.appendChild(el("span", "aidocs-item-desc", "Copy a prompt for your agent"));
+  newRow.addEventListener("click", () => {
+    copyNewDocPrompt();
+    setAidocsMenuOpen(false);
+  });
+  frag.appendChild(newRow);
+
+  aidocsMenu.replaceChildren(frag);
+}
+
+function currentSourcePath(): string {
+  if (summaryState.kind === "ready") return summaryState.summary.paper.sourcePath;
+  return docsState[0]?.doc.sourcePath ?? "this PDF";
+}
+
+function copyNewDocPrompt(): void {
+  const src = currentSourcePath();
+  const prompt =
+    `Use the ${docsSkillName} skill to create a BetaXiv AIDoc for ${src}. ` +
+    `Describe what you want (e.g. a comparison table of additional models by params/FLOPs, ` +
+    `a method flowchart, or a derivation), write it to ` +
+    `.betaxiv/docs/<contentId>/<id>.doc.json, and validate it against document.schema.v1.json.`;
+  const clip = navigator.clipboard;
+  if (!clip) {
+    showToast("Clipboard unavailable — copy the prompt from the docs manually.");
+    return;
+  }
+  void clip.writeText(prompt).then(
+    () => showToast("Prompt copied — paste it to your agent (Claude Code / Codex / Gemini CLI)."),
+    () => showToast("Could not copy to clipboard.")
+  );
+}
+
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
+function showToast(text: string): void {
+  let toast = document.getElementById("betaxiv-toast");
+  if (!toast) {
+    toast = el("div");
+    toast.id = "betaxiv-toast";
+    document.body.appendChild(toast);
+  }
+  toast.textContent = text;
+  toast.classList.add("show");
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast?.classList.remove("show"), 3500);
 }
 
 // --- Annotations: highlights + notes UI -------------------------------------

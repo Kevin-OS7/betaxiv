@@ -115,34 +115,50 @@ const webviewConfig = {
   logLevel: "info",
 };
 
-// Vendor the canonical skill + schema (which live at the repo root, OUTSIDE this package)
+// Vendor the canonical skills + schemas (which live at the repo root, OUTSIDE this package)
 // INTO the extension so they ship in the VSIX. Repo root stays the single source of truth.
+// Each skill is self-contained: its own contract schema is co-located inside its dir so the
+// installed skill validates against the same file in any workspace.
 function copyAssets() {
   const repoRoot = path.resolve(root, "..");
-  const skillSrc = path.join(repoRoot, "skill", "betaxiv-summarizer");
-  const schemaFile = path.join(repoRoot, "schema", "summary.schema.v2.json");
-  const exampleFile = path.join(repoRoot, "schema", "example.summary.json");
-
-  const skillDst = path.join(root, "assets", "skill", "betaxiv-summarizer");
-  // Purge the dest first: cpSync(filter) only skips copying — it never deletes pre-existing
-  // files, so a stale __pycache__/*.pyc from an earlier build would otherwise survive and ship
-  // in the VSIX (built from the generated assets/**). Wipe, then re-vendor cleanly.
-  fs.rmSync(skillDst, { recursive: true, force: true });
-  fs.mkdirSync(skillDst, { recursive: true });
-  // Vendor everything except Python build noise (so the VSIX / installed skill stays clean).
-  fs.cpSync(skillSrc, skillDst, {
-    recursive: true,
-    filter: (src) => !/(^|[/\\])(__pycache__|.*\.pyc)$/.test(src),
-  });
-  // Co-locate the schema with the installed skill so it is self-contained in any workspace.
-  fs.copyFileSync(schemaFile, path.join(skillDst, "summary.schema.v2.json"));
-
+  const schemaSrcDir = path.join(repoRoot, "schema");
+  const skillDstRoot = path.join(root, "assets", "skill");
   const schemaDst = path.join(root, "assets", "schema");
   fs.mkdirSync(schemaDst, { recursive: true });
-  fs.copyFileSync(schemaFile, path.join(schemaDst, "summary.schema.v2.json"));
-  fs.copyFileSync(exampleFile, path.join(schemaDst, "example.summary.json"));
 
-  console.log("[assets] vendored skill/betaxiv-summarizer + schema -> assets/");
+  // [skillName, contract schema file co-located into the skill] for each bundled skill.
+  const skills = [
+    ["betaxiv-summarizer", "summary.schema.v2.json"],
+    ["betaxiv-documenter", "document.schema.v1.json"],
+  ];
+  for (const [name, schemaName] of skills) {
+    const skillSrc = path.join(repoRoot, "skill", name);
+    const skillDst = path.join(skillDstRoot, name);
+    // Purge the dest first: cpSync(filter) only skips copying — it never deletes pre-existing
+    // files, so a stale __pycache__/*.pyc from an earlier build would otherwise survive and ship
+    // in the VSIX (built from the generated assets/**). Wipe, then re-vendor cleanly.
+    fs.rmSync(skillDst, { recursive: true, force: true });
+    fs.mkdirSync(skillDst, { recursive: true });
+    // Vendor everything except Python build noise (so the VSIX / installed skill stays clean).
+    fs.cpSync(skillSrc, skillDst, {
+      recursive: true,
+      filter: (src) => !/(^|[/\\])(__pycache__|.*\.pyc)$/.test(src),
+    });
+    // Co-locate the contract schema with the installed skill so it is self-contained.
+    fs.copyFileSync(path.join(schemaSrcDir, schemaName), path.join(skillDst, schemaName));
+  }
+
+  // Also mirror every schema + example into assets/schema for the extension to bundle/ship.
+  for (const file of [
+    "summary.schema.v2.json",
+    "example.summary.json",
+    "document.schema.v1.json",
+    "example.document.json",
+  ]) {
+    fs.copyFileSync(path.join(schemaSrcDir, file), path.join(schemaDst, file));
+  }
+
+  console.log("[assets] vendored skills (summarizer + documenter) + schemas -> assets/");
 }
 
 async function main() {
