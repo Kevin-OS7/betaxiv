@@ -84,6 +84,11 @@ freely **within** this contract; never break the format.
   - `sourcePath` — the PDF this doc is about, relative to the workspace root.
   - `description` — one-line summary shown under the title in the dropdown, or `null`.
 - `blocks[]` — ordered content rendered top-to-bottom. Each block is one of:
+  - `{ "type": "heading", "text": "…", "level"?: 2|3 }` — a **section title** (level 2, the
+    default) or subsection (level 3). The document title comes from `doc.title` (level 1), so
+    headings start at 2. **Use this for every section heading — do NOT fake a heading with a
+    bold paragraph** (`{ "type":"paragraph", "text":"**Section**" }`); that renders as small
+    inline bold text, not a real heading.
   - `{ "type": "paragraph", "text": "…" }` — flowing prose. Inline emphasis: `**bold**`,
     `` `code` ``, and inline math `$…$` (KaTeX). JSON doubles LaTeX backslashes (`$\\alpha$`).
   - `{ "type": "bullets", "items": [...], "ordered"?: bool }` — a list; items are strings or
@@ -184,6 +189,19 @@ Rules & tips:
 Only if your doc references a figure/table **from the source PDF**. The workflow is identical
 to the summarizer: you specify the **position**, the extension crops the real image.
 
+> **You never render or embed images.** You only supply a figure's `page` + `bbox`; the BetaXiv
+> extension crops the real pixels from the PDF with PDF.js. So:
+> - **Do NOT reach for `pdf2image` / `pdftoppm` / poppler, or PyMuPDF.** They are not needed and
+>   not part of this skill. Use the bundled `crop_helper.py` (pdfplumber + the already-installed
+>   `pypdfium2`); **poppler is NOT required** to show figures.
+> - A missing local renderer does **not** mean figures are unavailable. `locate`'s box
+>   *coordinates* come from pure pdfplumber geometry (no rendering at all); rendering is only for
+>   your own visual verification.
+> - If you truly cannot verify a box visually, still emit the figure with `page` + a best-effort
+>   `bbox` (from `locate`'s printed coordinates or native PDF reading), or `bbox: null` (the
+>   extension then shows caption + page). **Never silently drop figures** or downgrade to a
+>   hand-drawn "concept" diagram because a tool didn't run — try the bundled helper first.
+
 `bbox` is `[x0, y0, x1, y1]`, **normalized 0..1**, origin **top-left**, measured against the
 page's **upright cropBox** (PDF.js `view`, rotation applied). **Do NOT eyeball coordinates** —
 use the bundled helper `crop_helper.py` (needs `pdfplumber`; Pillow ships with it). It sits
@@ -223,7 +241,7 @@ const doc=d.doc||{};
 for(const k of ["id","title","kind","sourcePath","description"]) if(!(k in doc)) e.push("doc."+k+" missing");
 if(doc.id!==undefined && !/^[a-z0-9][a-z0-9-]*$/.test(doc.id)) e.push("doc.id must be a kebab-case slug");
 if(!Array.isArray(d.blocks)) e.push("blocks must be an array");
-const BT=new Set(["paragraph","bullets","formula","figure","table","diagram","chart"]);
+const BT=new Set(["heading","paragraph","bullets","formula","figure","table","diagram","chart"]);
 const labels=new Set((d.figures||[]).map(f=>f&&f.label));
 (d.blocks||[]).forEach((b,i)=>{ if(!b||!BT.has(b.type)){e.push("blocks["+i+"].type invalid");return;}
   if(b.type==="figure"&&!labels.has(b.label)) e.push("blocks["+i+"] figure label not in figures[]");

@@ -134,6 +134,14 @@ PDF.js, with `/Rotate` applied) and slices the `bbox` rectangle out of it. So `b
 `[x0, y0, x1, y1]`, **normalized 0..1**, origin **top-left**, measured **against that same
 upright cropBox page**.
 
+> **You never render or embed images** — you only supply `page` + `bbox` and the extension crops
+> the real pixels. So **do NOT reach for `pdf2image` / `pdftoppm` / poppler, or PyMuPDF**; they're
+> not needed. Use the bundled `crop_helper.py` (pdfplumber + the already-installed `pypdfium2`);
+> **poppler is NOT required**. A missing local renderer does not mean figures are unavailable —
+> `locate`'s coordinates are pure pdfplumber geometry (no rendering); rendering only helps you
+> verify a box visually. If you can't verify, still emit `page` + a best-effort `bbox` (or
+> `bbox: null`); **never silently drop a figure** because a tool didn't run.
+
 **Do NOT eyeball coordinates** — estimating pixels from a PDF you "read natively" drifts and
 swallows captions, author blocks, and neighboring columns. Use the bundled helper
 `crop_helper.py` (needs `pdfplumber` — `pip install pdfplumber` if missing; Pillow ships with
