@@ -267,6 +267,84 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
     post({ type: "docs", docs, invalid, docsSkillName: DOCS_SKILL_NAME });
   };
 
+  // Delete an AIDoc file on explicit user action. Resolves the target either by relPath (must be
+  // inside this paper's docs dir and a .doc.json) or by matching a valid doc's content id-keyed
+  // `doc.id`. Confirms first, then deletes to the trash (recoverable). The watcher re-sends docs.
+  const deleteDoc = async (req: { docId?: string; relPath?: string; label?: string }) => {
+    if (!workspaceFolder || !docsDirUri) return;
+    let target: vscode.Uri | undefined;
+    let label = req.label?.trim() || "this document";
+    const expectedPrefix = `.betaxiv/docs/${keyId}/`;
+    if (req.relPath) {
+      if (!req.relPath.startsWith(expectedPrefix) || !req.relPath.endsWith(".doc.json")) return;
+      target = vscode.Uri.joinPath(workspaceFolder.uri, req.relPath);
+      label = req.label?.trim() || (req.relPath.split("/").pop() ?? label);
+    } else if (req.docId) {
+      try {
+        const entries = await vscode.workspace.fs.readDirectory(docsDirUri);
+        for (const [name, type] of entries) {
+          if (type !== vscode.FileType.File || !name.endsWith(".doc.json")) continue;
+          const uri = vscode.Uri.joinPath(docsDirUri, name);
+          try {
+            const result = validateDocumentBytes(await vscode.workspace.fs.readFile(uri));
+            if (result.valid && result.doc?.doc.id === req.docId) {
+              target = uri;
+              label = req.label?.trim() || result.doc.doc.title || name;
+              break;
+            }
+          } catch {
+            /* skip unreadable file */
+          }
+        }
+      } catch {
+        return; // no docs dir
+      }
+    }
+    if (!target) return;
+    const choice = await vscode.window.showWarningMessage(
+      `Delete AIDoc “${label}”?`,
+      { modal: true, detail: "It's moved to the trash where supported, otherwise deleted permanently." },
+      "Delete"
+    );
+    if (choice !== "Delete") return;
+    try {
+      // Prefer the trash (recoverable), but some providers (e.g. on WSL/Linux) don't support it
+      // and throw — fall back to a permanent delete so the action still works.
+      try {
+        await vscode.workspace.fs.delete(target, { useTrash: true });
+      } catch {
+        await vscode.workspace.fs.delete(target, { useTrash: false });
+      }
+    } catch (err) {
+      void vscode.window.showErrorMessage(`BetaXiv: could not delete the doc — ${(err as Error).message}`);
+      return;
+    }
+    void sendDocs(); // refresh immediately (the watcher also fires)
+  };
+
+  // Delete this paper's summary file on explicit user action (confirm → trash, falling back to a
+  // permanent delete). The summary watcher's onDidDelete re-renders the pane as "not summarized".
+  const deleteSummary = async () => {
+    if (!summaryUri) return;
+    const choice = await vscode.window.showWarningMessage(
+      `Delete the summary for “${basename}”?`,
+      { modal: true, detail: "It's moved to the trash where supported, otherwise deleted permanently." },
+      "Delete"
+    );
+    if (choice !== "Delete") return;
+    try {
+      try {
+        await vscode.workspace.fs.delete(summaryUri, { useTrash: true });
+      } catch {
+        await vscode.workspace.fs.delete(summaryUri, { useTrash: false });
+      }
+    } catch (err) {
+      void vscode.window.showErrorMessage(`BetaXiv: could not delete the summary — ${(err as Error).message}`);
+      return;
+    }
+    post({ type: "summary-missing", summaryRelPath, skillName: SKILL_NAME }); // immediate; watcher also fires
+  };
+
   const sendAnnotations = async () => {
     if (!annotationsUri) {
       post({ type: "annotations", annotations: [] });
@@ -303,6 +381,7 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
         post({
           type: "bootstrap",
           pdfUri: panel.webview.asWebviewUri(pdfUri).toString(),
+          pdfRelPath: rel, // workspace-relative PDF path for copy provenance ("" if no workspace)
           pdfjsLibUri: vendor("pdf.min.mjs"),
           pdfViewerLibUri: vendor("pdf_viewer.mjs"),
           pdfWorkerUri: vendor("pdf.worker.min.mjs"),
@@ -315,6 +394,10 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
         void sendAnnotations();
       } else if (msg?.type === "annotations-save") {
         void saveAnnotations(Array.isArray(msg.annotations) ? msg.annotations : []);
+      } else if (msg?.type === "doc-delete") {
+        void deleteDoc({ docId: msg.docId, relPath: msg.relPath, label: msg.label });
+      } else if (msg?.type === "summary-delete") {
+        void deleteSummary();
       } else if (msg?.type === "error") {
         console.error("[betaxiv] webview error:", msg.message);
       }

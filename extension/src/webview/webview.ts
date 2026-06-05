@@ -26,7 +26,7 @@ import {
   denormRect,
   pointInRects,
 } from "./annotations";
-import { enableCopyReflow } from "./textLayerSelection";
+import { enableCopyReflow, reflowCurrentSelection } from "./textLayerSelection";
 
 interface VsCodeApi {
   postMessage(msg: unknown): void;
@@ -128,11 +128,15 @@ let docsState: PaperDoc[] = [];
 let docsInvalidState: { relPath: string; errors: string[] }[] = [];
 let docsSkillName = "betaxiv-documenter";
 let selection: Selection = { kind: "summary" };
+// Workspace-relative path of the open PDF (from bootstrap) — used as copy provenance and to
+// name the PDF in copied prompts. Falls back to the filename if no workspace-relative path.
+let openedPdfRelPath = "";
 
 window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
   const msg = event.data;
   switch (msg.type) {
     case "bootstrap":
+      openedPdfRelPath = msg.pdfRelPath || pdfBasename(msg.pdfUri);
       void renderPdf(
         msg.pdfUri,
         msg.pdfjsLibUri,
@@ -144,17 +148,14 @@ window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
       break;
     case "summary":
       summaryState = { kind: "ready", summary: msg.summary };
-      setSummaryStatus("ready");
       refreshAidocs();
       break;
     case "summary-missing":
       summaryState = { kind: "missing", relPath: msg.summaryRelPath, skillName: msg.skillName };
-      setSummaryStatus("missing");
       refreshAidocs();
       break;
     case "summary-invalid":
       summaryState = { kind: "invalid", relPath: msg.summaryRelPath, errors: msg.errors };
-      setSummaryStatus("invalid");
       refreshAidocs();
       break;
     case "docs":
@@ -182,7 +183,6 @@ pdfPane.addEventListener("scroll", () => {
 const app = document.getElementById("app") as HTMLElement;
 const splitter = document.getElementById("splitter") as HTMLElement;
 const aidocsToggle = document.getElementById("aidocs-toggle") as HTMLButtonElement;
-const summaryStatus = document.getElementById("summary-status") as HTMLElement;
 
 const viewState = (vscode.getState() as SavedState) ?? {};
 if (viewState.splitCols) app.style.setProperty("--split-cols", viewState.splitCols);
@@ -198,6 +198,11 @@ function setSummaryOpen(open: boolean): void {
   saveState({ summaryOpen: open });
 }
 setSummaryOpen(summaryOpen);
+
+// Close (×) at the pane's top-left collapses the right pane.
+document
+  .getElementById("aidocs-close")
+  ?.addEventListener("click", () => setSummaryOpen(false));
 
 // --- Summary text zoom (independent of the PDF zoom) ------------------------
 // Scales only the summary pane's base font-size via the --summary-zoom CSS var; the
@@ -300,20 +305,6 @@ summaryPane.addEventListener("click", (e) => {
   const onFigure = e.target instanceof Element && e.target.closest(".fig");
   if (!onFigure) setActiveFigure(null);
 });
-
-// Top-right notice so the user knows a summary is missing/invalid even while collapsed.
-type SummaryStatus = "ready" | "missing" | "invalid";
-function setSummaryStatus(status: SummaryStatus): void {
-  if (status === "missing") {
-    summaryStatus.textContent = "Not yet summarized";
-    summaryStatus.hidden = false;
-  } else if (status === "invalid") {
-    summaryStatus.textContent = "Summary invalid";
-    summaryStatus.hidden = false;
-  } else {
-    summaryStatus.hidden = true;
-  }
-}
 
 // Drag the splitter to re-balance the two panes; the ratio is persisted.
 let dragging = false;
@@ -1076,7 +1067,12 @@ function renderBlocks(
   keyPrefix = ""
 ): void {
   blocks.forEach((b, i) => {
-    if (b.type === "paragraph") {
+    if (b.type === "heading") {
+      // Section title — same visual weight as a summary section heading.
+      const h = el(b.level === 3 ? "h3" : "h2", b.level === 3 ? "doc-heading doc-h3" : "doc-heading doc-h2");
+      inline(b.text, h);
+      parent.appendChild(h);
+    } else if (b.type === "paragraph") {
       const p = el("p", "block-para");
       inline(b.text, p);
       parent.appendChild(p);
@@ -1423,31 +1419,132 @@ function aidocsItem(active: boolean, extraClass?: string): HTMLButtonElement {
   return row;
 }
 
+// An inline icon control for a menu row. It's a <span> (not a <button>) so it can nest inside the
+// row's <button> legally; its click is stopped from bubbling so it doesn't also select the row.
+// Icons are inline SVG (stroke:currentColor) so CSS can color them — an emoji ignores `color`.
+const SVGNS = "http://www.w3.org/2000/svg";
+function iconControl(cls: string, title: string, paths: string[], onClick: () => void): HTMLElement {
+  const ctl = el("span", cls);
+  ctl.title = title;
+  ctl.setAttribute("role", "button");
+  ctl.setAttribute("aria-label", title);
+  const svg = document.createElementNS(SVGNS, "svg");
+  for (const [k, v] of Object.entries({
+    viewBox: "0 0 24 24",
+    width: "15",
+    height: "15",
+    fill: "none",
+    stroke: "currentColor",
+    "stroke-width": "2",
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+    "aria-hidden": "true",
+  })) {
+    svg.setAttribute(k, v);
+  }
+  for (const d of paths) {
+    const p = document.createElementNS(SVGNS, "path");
+    p.setAttribute("d", d);
+    svg.appendChild(p);
+  }
+  ctl.appendChild(svg);
+  ctl.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onClick();
+  });
+  return ctl;
+}
+
+// Feather "trash-2": lid + can + two stripes.
+function deleteControl(title: string, onDelete: () => void): HTMLElement {
+  return iconControl(
+    "aidocs-del",
+    title,
+    ["M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"],
+    onDelete
+  );
+}
+
+// Feather "rotate-cw": a circular arrow = recreate.
+function recreateControl(title: string, onClick: () => void): HTMLElement {
+  return iconControl("aidocs-recreate", title, ["M23 4v6h-6", "M20.49 15a9 9 0 1 1-2.12-9.36L23 10"], onClick);
+}
+
+// Ask the host to delete a doc, then close the menu (the host confirms; the watcher refreshes).
+function deleteDocRequest(req: { docId?: string; relPath?: string; label?: string }): void {
+  vscode.postMessage({ type: "doc-delete", ...req });
+  setAidocsMenuOpen(false);
+}
+
+// Ask the host to delete this paper's summary (host confirms; the summary watcher refreshes).
+function deleteSummaryRequest(): void {
+  vscode.postMessage({ type: "summary-delete" });
+  setAidocsMenuOpen(false);
+}
+
 function renderAidocsMenu(): void {
   const frag = document.createDocumentFragment();
 
-  // Row 1: the special Summary.
-  const summaryRow = aidocsItem(selection.kind === "summary");
-  const sumLabel = summaryState.kind === "missing" ? "Not yet summarized" : "Summary";
-  summaryRow.appendChild(el("span", "aidocs-item-title", sumLabel));
-  if (summaryState.kind === "invalid") summaryRow.appendChild(el("span", "aidocs-badge", "invalid"));
+  // Row 1: the special Summary. When a summary file exists (ready or invalid) the row carries a
+  // delete (trash) control, like doc rows.
+  const hasSummary = summaryState.kind === "ready" || summaryState.kind === "invalid";
+  const summaryRow = aidocsItem(selection.kind === "summary", hasSummary ? "aidocs-item-has-del" : undefined);
+  const sumMain = el("span", "aidocs-item-main");
+  sumMain.appendChild(
+    el("span", "aidocs-item-title", summaryState.kind === "missing" ? "Not yet summarized" : "Summary")
+  );
+  if (summaryState.kind === "invalid") sumMain.appendChild(el("span", "aidocs-badge", "invalid"));
+  summaryRow.appendChild(sumMain);
+  // When a summary exists: Recreate (copy prompt) + Delete, side by side at the row's right.
+  if (hasSummary) {
+    const actions = el("span", "aidocs-actions");
+    actions.appendChild(
+      recreateControl("Recreate summary (copy a prompt for your agent)", () => {
+        copyNewSummaryPrompt();
+        setAidocsMenuOpen(false);
+      })
+    );
+    actions.appendChild(deleteControl("Delete the summary", deleteSummaryRequest));
+    summaryRow.appendChild(actions);
+  }
   summaryRow.addEventListener("click", () => selectArtifact({ kind: "summary" }));
   frag.appendChild(summaryRow);
 
-  // Agent-authored docs.
+  // When there's no summary yet, offer "+ New summary…" (mirrors "+ New doc…").
+  if (summaryState.kind === "missing") {
+    const newSum = aidocsItem(false, "aidocs-new");
+    newSum.appendChild(el("span", "aidocs-item-title", "+ New summary…"));
+    newSum.appendChild(el("span", "aidocs-item-desc", "Copy a prompt for your agent"));
+    newSum.addEventListener("click", () => {
+      copyNewSummaryPrompt();
+      setAidocsMenuOpen(false);
+    });
+    frag.appendChild(newSum);
+  }
+
+  // Agent-authored docs (each row has a trash control to delete the underlying file).
   for (const d of docsState) {
-    const row = aidocsItem(selection.kind === "doc" && selection.id === d.doc.id);
-    row.appendChild(el("span", "aidocs-item-title", d.doc.title));
-    if (d.doc.description) row.appendChild(el("span", "aidocs-item-desc", d.doc.description));
+    const row = aidocsItem(selection.kind === "doc" && selection.id === d.doc.id, "aidocs-item-has-del");
+    const main = el("span", "aidocs-item-main");
+    main.appendChild(el("span", "aidocs-item-title", d.doc.title)); // title only — no preview
+    row.appendChild(main);
+    row.appendChild(deleteControl(`Delete “${d.doc.title}”`, () => deleteDocRequest({ docId: d.doc.id, label: d.doc.title })));
     row.addEventListener("click", () => selectArtifact({ kind: "doc", id: d.doc.id }));
     frag.appendChild(row);
   }
 
-  // Docs that failed validation — selectable so the user can see the errors.
+  // Docs that failed validation — selectable so the user can see the errors, and deletable.
   for (const bad of docsInvalidState) {
-    const row = aidocsItem(selection.kind === "invalid" && selection.relPath === bad.relPath, "invalid");
-    row.appendChild(el("span", "aidocs-item-title", bad.relPath.split("/").pop() ?? bad.relPath));
-    row.appendChild(el("span", "aidocs-badge", "invalid"));
+    const name = bad.relPath.split("/").pop() ?? bad.relPath;
+    const row = aidocsItem(
+      selection.kind === "invalid" && selection.relPath === bad.relPath,
+      "invalid aidocs-item-has-del"
+    );
+    const main = el("span", "aidocs-item-main");
+    main.appendChild(el("span", "aidocs-item-title", name));
+    main.appendChild(el("span", "aidocs-badge", "invalid"));
+    row.appendChild(main);
+    row.appendChild(deleteControl(`Delete ${name}`, () => deleteDocRequest({ relPath: bad.relPath, label: name })));
     row.addEventListener("click", () => selectArtifact({ kind: "invalid", relPath: bad.relPath }));
     frag.appendChild(row);
   }
@@ -1470,22 +1567,45 @@ function renderAidocsMenu(): void {
 
 function currentSourcePath(): string {
   if (summaryState.kind === "ready") return summaryState.summary.paper.sourcePath;
-  return docsState[0]?.doc.sourcePath ?? "this PDF";
+  if (docsState[0]) return docsState[0].doc.sourcePath;
+  return openedPdfRelPath || "this PDF";
 }
 
+/** Last path segment of the (webview-resource) PDF URI, decoded — e.g. "skillopt.pdf". */
+function pdfBasename(uri: string): string {
+  try {
+    const path = uri.split("?")[0].split("#")[0];
+    return decodeURIComponent(path.split("/").pop() || "") || "this PDF";
+  } catch {
+    return "this PDF";
+  }
+}
+
+// The copied prompts stay minimal: which skill, which PDF, and a blank line for the user's
+// own style request. The save path + validation live INSIDE the skill (SKILL.md), so they
+// don't need repeating here — the agent reads them when the skill runs.
 function copyNewDocPrompt(): void {
-  const src = currentSourcePath();
-  const prompt =
-    `Use the ${docsSkillName} skill to create a BetaXiv AIDoc for ${src}. ` +
-    `Describe what you want (e.g. a comparison table of additional models by params/FLOPs, ` +
-    `a method flowchart, or a derivation), write it to ` +
-    `.betaxiv/docs/<contentId>/<id>.doc.json, and validate it against document.schema.v1.json.`;
+  copyPrompt(
+    `Use the ${docsSkillName} skill to create a BetaXiv AIDoc for ${currentSourcePath()}.\n` +
+      `User-specified doc style:\n`
+  );
+}
+
+function copyNewSummaryPrompt(): void {
+  const skill = summaryState.kind === "missing" ? summaryState.skillName : "betaxiv-summarizer";
+  copyPrompt(
+    `Use the ${skill} skill to write the BetaXiv summary for ${currentSourcePath()}.\n` +
+      `User-specified summary style:\n`
+  );
+}
+
+function copyPrompt(text: string): void {
   const clip = navigator.clipboard;
   if (!clip) {
     showToast("Clipboard unavailable — copy the prompt from the docs manually.");
     return;
   }
-  void clip.writeText(prompt).then(
+  void clip.writeText(text).then(
     () => showToast("Prompt copied — paste it to your agent (Claude Code / Codex / Gemini CLI)."),
     () => showToast("Could not copy to clipboard.")
   );
@@ -1756,10 +1876,20 @@ function renderNotesList(): void {
 function goToAnnotation(a: Annotation): void {
   const slotEl = pdfPages.querySelector<HTMLElement>(`.page-slot[data-page="${a.page}"]`);
   if (!slotEl) return;
-  const y0 = a.rects[0]?.y0 ?? 0;
+  const rect = a.rects[0];
+  const y0 = rect?.y0 ?? 0;
   const target = slotEl.offsetTop + y0 * slotEl.offsetHeight - 96;
   pdfPane.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
-  setTimeout(() => openNotePopover(a), 360);
+  setTimeout(() => {
+    // Anchor the note window just below the highlight's on-screen position (intuitive), rather
+    // than screen-center. Computed after the smooth scroll settles so the rect is where it lands.
+    if (rect) {
+      const r = slotEl.getBoundingClientRect();
+      openNotePopover(a, r.left + rect.x0 * r.width, r.top + rect.y1 * r.height);
+    } else {
+      openNotePopover(a);
+    }
+  }, 360);
 }
 
 // Floating selection toolbar: a drag grip, color swatches, and a Note action.
@@ -1786,6 +1916,14 @@ selNoteBtn.textContent = "Note";
 selNoteBtn.title = "Highlight and add a note";
 selNoteBtn.addEventListener("click", addNoteFromSelection);
 selToolbar.appendChild(selNoteBtn);
+// "Copy ⧉": copy the selection WITH its file path ("<relpath>\n<text>") for pasting as a quote
+// with provenance. Plain Ctrl/Cmd+C stays path-free.
+const selCopyBtn = document.createElement("button");
+selCopyBtn.className = "sel-copy-btn";
+selCopyBtn.textContent = "Copy ⧉";
+selCopyBtn.title = "Copy selection with file path";
+selCopyBtn.addEventListener("click", copySelectionWithPath);
+selToolbar.appendChild(selCopyBtn);
 // Pressing a toolbar button must not collapse/blur the selection before the click lands.
 selToolbar.addEventListener("mousedown", (e) => e.preventDefault());
 document.body.appendChild(selToolbar);
@@ -1849,6 +1987,26 @@ function addNoteFromSelection(): void {
   openNotePopover(a, pos.x, pos.y);
 }
 
+// Copy the current selection prefixed with the PDF's relative path: "<relpath>\n<text>".
+// Uses the reflowed PDF text when available (the toolbar only shows for PDF selections).
+function copySelectionWithPath(): void {
+  const text = reflowCurrentSelection() ?? window.getSelection()?.toString() ?? "";
+  if (!text.trim()) return;
+  const prefix = openedPdfRelPath.trim();
+  const payload = prefix ? `${prefix}\n${text}` : text;
+  const clip = navigator.clipboard;
+  if (!clip) {
+    showToast("Clipboard unavailable.");
+    return;
+  }
+  void clip.writeText(payload).then(
+    () => showToast("Copied with file path."),
+    () => showToast("Could not copy to clipboard.")
+  );
+  window.getSelection()?.removeAllRanges();
+  hideSelToolbar();
+}
+
 // Note popover: view/edit a highlight's note, recolor, or delete it.
 let activePopoverId: string | null = null;
 const popover = document.createElement("div");
@@ -1856,8 +2014,20 @@ popover.id = "note-popover";
 popover.hidden = true;
 // Draggable header: grabbing it moves the window and persists the spot; double-click re-docks.
 const popHeader = el("div", "note-header");
-popHeader.appendChild(el("span", "note-header-title", "Note"));
-popHeader.appendChild(el("span", "note-header-hint", "drag to move"));
+const popTitles = el("div", "note-header-titles");
+popTitles.appendChild(el("span", "note-header-title", "Note"));
+popTitles.appendChild(el("span", "note-header-hint", "drag to move"));
+popHeader.appendChild(popTitles);
+// × close, top-right (mirrors the Notes panel). stopPropagation on mousedown so clicking it
+// doesn't start a header drag.
+const popClose = document.createElement("button");
+popClose.className = "note-header-close";
+popClose.title = "Close";
+popClose.setAttribute("aria-label", "Close note");
+popClose.textContent = "×";
+popClose.addEventListener("mousedown", (e) => e.stopPropagation());
+popClose.addEventListener("click", closeNotePopover);
+popHeader.appendChild(popClose);
 const popQuote = document.createElement("div");
 popQuote.className = "note-quote";
 const popText = document.createElement("textarea");
@@ -1893,11 +2063,8 @@ popDelete.addEventListener("click", () => {
   repaintAllAnnotations();
   closeNotePopover();
 });
-const popClose = document.createElement("button");
-popClose.className = "note-close";
-popClose.textContent = "Close";
-popClose.addEventListener("click", closeNotePopover);
-popActions.append(popDelete, popClose);
+// Delete sits in the action row (where Close used to be); Close is now the × in the header.
+popActions.append(popDelete);
 popover.append(popHeader, popQuote, popText, popColors, popActions);
 // Keep clicks inside the popover from reaching the global dismiss handler.
 popover.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -1976,6 +2143,8 @@ pdfPane.addEventListener("scroll", hideSelToolbar);
 
 // Reflow copied PDF text (join wrapped lines within a paragraph, break at paragraph ends),
 // overriding PDF.js's line-by-line copy. Installed once; it only acts on PDF text selections.
+// Plain Ctrl/Cmd+C copies just the text — the file path is added only via the toolbar's
+// "copy with path" button (see selToolbar), not on every copy.
 enableCopyReflow();
 
 // Handshake: tell the host we're listening, so it posts bootstrap + summary.

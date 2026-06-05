@@ -78,19 +78,34 @@ body {
   color: var(--vscode-button-foreground, #fff);
 }
 
-#summary-status {
-  font-size: 12px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  background: var(--vscode-inputValidation-warningBackground, rgba(255, 200, 0, 0.12));
-  border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(255, 200, 0, 0.4));
-  color: var(--vscode-foreground);
-}
-
 #summary-pane {
   height: 100vh;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+/* Close (×) pinned to the pane's top-left; stays put while the content scrolls. */
+#aidocs-close {
+  position: sticky;
+  top: 6px;
+  z-index: 6;
+  display: block;
+  margin: 6px 0 2px 6px; /* small top-left chip; content flows below it */
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.4));
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, #252526);
+  color: var(--vscode-foreground);
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+#aidocs-close:hover {
+  opacity: 1;
+  background: var(--vscode-button-secondaryHoverBackground, #45494e);
 }
 
 /* The PDF pane is the scroll container on BOTH axes so that, when zoomed in past
@@ -239,18 +254,21 @@ body {
   background: #ff8585;
 }
 
-.sel-note-btn {
+.sel-note-btn,
+.sel-copy-btn {
   cursor: pointer;
   border: none;
   border-radius: 4px;
   padding: 3px 9px;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   background: var(--vscode-button-secondaryBackground, #3a3d41);
   color: var(--vscode-button-secondaryForeground, #fff);
 }
 
-.sel-note-btn:hover {
+.sel-note-btn:hover,
+.sel-copy-btn:hover {
   background: var(--vscode-button-secondaryHoverBackground, #45494e);
 }
 
@@ -303,32 +321,30 @@ body {
 
 .note-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end; /* Delete sits where Close used to be (right) */
   gap: 8px;
 }
 
-.note-actions button {
+/* Delete: red text, not a red box (Close moved to the header ×). */
+.note-delete {
   cursor: pointer;
   border: none;
   border-radius: 4px;
   padding: 4px 12px;
   font-size: 12px;
-  background: var(--vscode-button-secondaryBackground, #3a3d41);
-  color: var(--vscode-button-secondaryForeground, #fff);
+  background: transparent;
+  color: var(--vscode-errorForeground, #f14c4c);
+  font-weight: 600;
 }
 
-.note-actions button:hover {
-  background: var(--vscode-button-secondaryHoverBackground, #45494e);
-}
-
-.note-delete {
-  background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+.note-delete:hover {
+  background: var(--vscode-inputValidation-errorBackground, rgba(241, 76, 76, 0.14));
 }
 
 /* --- Draggable window chrome (note popover header + selection-toolbar grip) --- */
 .note-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin: -2px -2px 2px;
@@ -336,6 +352,28 @@ body {
   border-bottom: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.25));
   cursor: grab;
   user-select: none;
+}
+
+.note-header-titles {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.note-header-close {
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--vscode-foreground);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  opacity: 0.7;
+}
+
+.note-header-close:hover {
+  opacity: 1;
 }
 
 .note-header.dragging {
@@ -654,6 +692,21 @@ body {
   gap: 8px;
 }
 
+/* AIDoc section headings (the `heading` block) — same weight as summary section titles. */
+.doc-heading {
+  font-weight: 600;
+  line-height: 1.3;
+}
+.doc-h2 {
+  font-size: 1.25em;
+  margin: 26px 0 8px;
+}
+.doc-h3 {
+  font-size: 1.08em;
+  margin: 18px 0 6px;
+  color: var(--vscode-foreground);
+}
+
 .page-badge {
   font-size: 0.72em;
   font-weight: 600;
@@ -939,6 +992,68 @@ svg.fig-image {
 
 .aidocs-item.active {
   background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #fff);
+}
+
+/* Rows that carry a delete control switch to a horizontal layout: text block + trash. */
+.aidocs-item-has-del {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aidocs-item-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0; /* let long titles/descriptions truncate instead of pushing out the trash */
+}
+
+/* Inline row actions (Recreate + Delete), grouped at the row's right edge. */
+.aidocs-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.aidocs-del,
+.aidocs-recreate {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 3px 4px;
+  line-height: 0;
+  opacity: 0.7;
+}
+
+.aidocs-del {
+  color: var(--vscode-errorForeground, #f14c4c); /* red trash icon */
+}
+
+.aidocs-recreate {
+  color: var(--vscode-foreground); /* neutral (non-destructive) */
+}
+
+.aidocs-del:hover {
+  opacity: 1;
+  background: rgba(241, 76, 76, 0.12); /* soft red, not a heavy box */
+}
+
+.aidocs-recreate:hover {
+  opacity: 1;
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.18));
+}
+
+/* Keep icons legible when the row is the active (blue) selection. */
+.aidocs-item.active .aidocs-del {
+  color: #ff9a9a;
+}
+.aidocs-item.active .aidocs-recreate {
   color: var(--vscode-button-foreground, #fff);
 }
 

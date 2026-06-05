@@ -38,6 +38,13 @@ export type Block =
   | { type: "formula"; text: string }
   | { type: "figure"; label: string };
 
+/** A section heading inside a doc (the doc title is level 1; headings are level 2 or 3). */
+export interface HeadingBlock {
+  type: "heading";
+  text: string;
+  level?: 2 | 3;
+}
+
 /** A declarative data table. Cells are inline-markup strings (**bold**, `code`, $math$). */
 export interface TableBlock {
   type: "table";
@@ -100,7 +107,7 @@ export interface ChartBlock {
  * Blocks allowed inside an AIDoc: the summary block union plus the doc-only declarative
  * `table` and `diagram` blocks. Summaries keep using the narrower `Block`.
  */
-export type DocBlock = Block | TableBlock | DiagramBlock | ChartBlock;
+export type DocBlock = Block | HeadingBlock | TableBlock | DiagramBlock | ChartBlock;
 
 export interface Figure {
   label: string;
@@ -167,6 +174,7 @@ export type HostMessage =
   | {
       type: "bootstrap";
       pdfUri: string;
+      pdfRelPath: string; // PDF path relative to the workspace root (for copy provenance); "" if none
       pdfjsLibUri: string;
       pdfViewerLibUri: string;
       pdfWorkerUri: string;
@@ -193,4 +201,10 @@ export type WebviewMessage =
   // The webview owns annotation editing; it posts the full set after each change and the
   // host persists it to `.betaxiv/annotations/<contentId>.json` (the webview never
   // touches the filesystem — same boundary as the summary JSON).
-  | { type: "annotations-save"; annotations: Annotation[] };
+  | { type: "annotations-save"; annotations: Annotation[] }
+  // User asked to delete an AIDoc. The host resolves the file (by content id-keyed docId for a
+  // valid doc, or by relPath for an invalid one), confirms, and deletes it (to the trash). The
+  // webview never touches the filesystem — same boundary as summaries/annotations.
+  | { type: "doc-delete"; docId?: string; relPath?: string; label?: string }
+  // User asked to delete this paper's summary file (same boundary/flow as doc-delete).
+  | { type: "summary-delete" };

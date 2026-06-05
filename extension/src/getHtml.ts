@@ -73,12 +73,12 @@ export function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): stri
       <button id="summary-zoom-reset" title="Reset summary text size" aria-label="Reset summary text size">Reset</button>
     </div>
     <div id="view-controls">
-      <span id="summary-status" hidden></span>
       <button id="notes-toggle" aria-pressed="false" title="Search this PDF's notes &amp; highlights">Notes</button>
       <button id="aidocs-toggle" aria-haspopup="true" aria-expanded="false" title="Summary &amp; AI-generated docs">AIDocs ▾</button>
     </div>
     <div id="splitter" role="separator" aria-orientation="vertical" tabindex="0"></div>
     <section id="summary-pane" aria-label="Summary">
+      <button id="aidocs-close" title="Close panel" aria-label="Close panel">×</button>
       <div id="summary-root" class="status">Waiting for summary…</div>
     </section>
   </div>

@@ -7,7 +7,9 @@ import { reflowLines, type ReflowLine } from "./textReflow";
 
 let installed = false;
 
-export function enableCopyReflow(): void {
+// `getPrefix` (optional) returns a provenance line prepended as "<prefix>\n" to copied PDF text
+// — e.g. the PDF's workspace-relative path, so a pasted quote carries where it came from.
+export function enableCopyReflow(getPrefix?: () => string): void {
   if (installed) return;
   installed = true;
 
@@ -26,7 +28,8 @@ export function enableCopyReflow(): void {
       if (!layer) return;
       const text = reflowSelectionInLayer(range, layer);
       if (text && event.clipboardData) {
-        event.clipboardData.setData("text/plain", text);
+        const prefix = getPrefix?.().trim();
+        event.clipboardData.setData("text/plain", prefix ? `${prefix}\n${text}` : text);
         event.preventDefault();
         // Stop the builder's bubble-phase copy handler from overwriting our reflowed text.
         event.stopPropagation();
@@ -34,6 +37,22 @@ export function enableCopyReflow(): void {
     },
     true // capture: run ahead of the text layer's own copy listener
   );
+}
+
+// Reflowed text for the CURRENT selection if it starts inside a PDF text layer, else null.
+// Used by the "copy with path" toolbar button so it copies the same nicely-reflowed text the
+// capture-phase copy handler produces.
+export function reflowCurrentSelection(): string | null {
+  const selection = document.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  const startEl =
+    range.startContainer.nodeType === Node.TEXT_NODE
+      ? range.startContainer.parentElement
+      : (range.startContainer as Element);
+  const layer = startEl?.closest<HTMLElement>(".textLayer");
+  if (!layer) return null;
+  return reflowSelectionInLayer(range, layer) || null;
 }
 
 interface Frag {
