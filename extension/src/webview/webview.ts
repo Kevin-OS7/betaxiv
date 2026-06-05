@@ -59,6 +59,7 @@ interface SavedState {
   splitCols?: string;
   summaryZoom?: number;
   figZoom?: Record<string, number>; // per-figure zoom, keyed by figure label
+  selToolbarOffset?: { dx: number; dy: number }; // user-dragged shift off the toolbar's anchor
 }
 function saveState(patch: Partial<SavedState>): void {
   const cur = (vscode.getState() as SavedState) ?? {};
@@ -1077,6 +1078,7 @@ function repaintAllAnnotations(): void {
       paintAnnoLayer(layer, page, canvas.clientWidth, canvas.clientHeight);
     }
   }
+  refreshNotesPanelIfOpen(); // every edit path funnels through here, so the index stays live
 }
 
 // Build a SelectionAnchor from the live text selection, or null if empty / outside the PDF.
@@ -1139,10 +1141,139 @@ function hitTestAnnotation(slotEl: HTMLElement, clientX: number, clientY: number
   return null;
 }
 
-// Floating selection toolbar: color swatches + a Note action.
+// Make `el` draggable by grabbing `handle`: live-updates el.style.left/top during the drag
+// (clamped to the viewport) and calls onDrop with the final top-left once released. This is what
+// lets the user shove the transient annotation windows out of the way; callers persist via onDrop.
+function makeDraggable(
+  el: HTMLElement,
+  handle: HTMLElement,
+  onDrop: (left: number, top: number) => void
+): void {
+  handle.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); // keep any text selection alive; don't start a native drag
+    e.stopPropagation(); // and don't let the global dismiss handler close the window mid-grab
+    const start = el.getBoundingClientRect();
+    const offX = e.clientX - start.left;
+    const offY = e.clientY - start.top;
+    handle.classList.add("dragging");
+    const move = (ev: MouseEvent) => {
+      const left = Math.max(6, Math.min(window.innerWidth - el.offsetWidth - 6, ev.clientX - offX));
+      const top = Math.max(6, Math.min(window.innerHeight - el.offsetHeight - 6, ev.clientY - offY));
+      el.style.left = `${left}px`;
+      el.style.top = `${top}px`;
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      handle.classList.remove("dragging");
+      onDrop(parseFloat(el.style.left) || 0, parseFloat(el.style.top) || 0);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  });
+}
+
+// --- Notes panel: a searchable index of THIS PDF's highlights & notes --------
+// A floating panel listing every annotation (quoted text + note), filterable by a search box.
+// Clicking an entry scrolls the PDF to that highlight and opens its note for editing. The list
+// is rebuilt from annoStore on open and on every edit (via refreshNotesPanelIfOpen).
+const notesToggle = document.getElementById("notes-toggle") as HTMLButtonElement;
+const notesPanel = document.createElement("div");
+notesPanel.id = "notes-panel";
+notesPanel.hidden = true;
+const notesHeader = el("div", "notes-header");
+const notesTitle = el("span", "notes-title", "Notes");
+const notesClose = document.createElement("button");
+notesClose.className = "notes-close";
+notesClose.title = "Close";
+notesClose.setAttribute("aria-label", "Close notes");
+notesClose.textContent = "×";
+notesClose.addEventListener("click", () => setNotesOpen(false));
+notesHeader.append(notesTitle, notesClose);
+const notesSearch = document.createElement("input");
+notesSearch.className = "notes-search";
+notesSearch.type = "search";
+notesSearch.placeholder = "Search notes & highlights…";
+notesSearch.addEventListener("input", () => renderNotesList());
+const notesList = el("div", "notes-list");
+notesPanel.append(notesHeader, notesSearch, notesList);
+// Clicks inside the panel must not reach the global dismiss handler (which clears selections).
+notesPanel.addEventListener("mousedown", (e) => e.stopPropagation());
+document.body.appendChild(notesPanel);
+// The header doubles as a drag handle so the panel itself can be moved aside.
+makeDraggable(notesPanel, notesHeader, () => {});
+
+function setNotesOpen(open: boolean): void {
+  notesPanel.hidden = !open;
+  notesToggle.setAttribute("aria-pressed", String(open));
+  if (open) {
+    renderNotesList();
+    notesSearch.focus();
+  }
+}
+notesToggle.addEventListener("click", () => setNotesOpen(notesPanel.hidden));
+
+function refreshNotesPanelIfOpen(): void {
+  if (!notesPanel.hidden) renderNotesList();
+}
+
+function renderNotesList(): void {
+  const q = notesSearch.value.trim().toLowerCase();
+  const all = annoStore.list();
+  const items = all
+    .filter((a) => !q || a.note.toLowerCase().includes(q) || a.text.toLowerCase().includes(q))
+    .sort((a, b) => a.page - b.page || (a.rects[0]?.y0 ?? 0) - (b.rects[0]?.y0 ?? 0));
+  notesTitle.textContent = `Notes · ${q ? `${items.length}/${all.length}` : all.length}`;
+
+  if (!items.length) {
+    notesList.replaceChildren(
+      el("div", "notes-empty", all.length ? "No matches." : "No notes or highlights yet.")
+    );
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const a of items) {
+    const item = el("div", "notes-item");
+    const top = el("div", "notes-item-top");
+    top.appendChild(el("span", `notes-swatch anno-${a.color}`));
+    top.appendChild(el("span", "notes-page", `p.${a.page}`));
+    if (a.note) top.appendChild(el("span", "notes-badge", "note"));
+    item.appendChild(top);
+    // The quote's left rule mirrors the highlight's own color (set via the anno-<color> class).
+    if (a.text) item.appendChild(el("div", `notes-quote anno-${a.color}`, a.text));
+    if (a.note) item.appendChild(el("div", "notes-note", a.note));
+    item.addEventListener("click", () => {
+      setNotesOpen(false);
+      goToAnnotation(a);
+    });
+    frag.appendChild(item);
+  }
+  notesList.replaceChildren(frag);
+}
+
+// Scroll the PDF to an annotation, then open its note for editing. The target page may still be
+// a lazy placeholder; scrolling brings it into the IntersectionObserver's margin so it renders,
+// and the popover opens once the smooth scroll settles.
+function goToAnnotation(a: Annotation): void {
+  const slotEl = pdfPages.querySelector<HTMLElement>(`.page-slot[data-page="${a.page}"]`);
+  if (!slotEl) return;
+  const y0 = a.rects[0]?.y0 ?? 0;
+  const target = slotEl.offsetTop + y0 * slotEl.offsetHeight - 96;
+  pdfPane.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+  setTimeout(() => openNotePopover(a), 360);
+}
+
+// Floating selection toolbar: a drag grip, color swatches, and a Note action.
 const selToolbar = document.createElement("div");
 selToolbar.id = "sel-toolbar";
 selToolbar.hidden = true;
+const selGrip = document.createElement("span");
+selGrip.className = "sel-grip";
+selGrip.title = "Drag to move; double-click to re-anchor";
+selGrip.setAttribute("aria-hidden", "true");
+selGrip.textContent = "⠿";
+selToolbar.appendChild(selGrip);
 for (const color of ANNOTATION_COLORS) {
   const sw = document.createElement("button");
   sw.className = `swatch anno-${color}`;
@@ -1162,6 +1293,12 @@ selToolbar.addEventListener("mousedown", (e) => e.preventDefault());
 document.body.appendChild(selToolbar);
 
 let toolbarPos = { x: 0, y: 0 };
+// The toolbar's un-shifted anchor position at the moment it was last shown — the baseline a
+// drag's persisted offset is measured against (so the offset follows each new selection).
+let selToolbarNatural = { x: 0, y: 0 };
+function selOffset(): { dx: number; dy: number } {
+  return ((vscode.getState() as SavedState) ?? {}).selToolbarOffset ?? { dx: 0, dy: 0 };
+}
 function showSelToolbar(): void {
   const sel = window.getSelection();
   const rects = sel && sel.rangeCount ? sel.getRangeAt(0).getClientRects() : null;
@@ -1171,14 +1308,28 @@ function showSelToolbar(): void {
   const anchorYBottom = last ? last.bottom : window.innerHeight / 2;
   selToolbar.hidden = false; // unhide before measuring
   const tb = selToolbar.getBoundingClientRect();
-  const left = Math.max(6, Math.min(window.innerWidth - tb.width - 6, anchorX - tb.width));
+  const natX = Math.max(6, Math.min(window.innerWidth - tb.width - 6, anchorX - tb.width));
   // Default below the selection's last line; flip above only if there's no room below.
-  let top = anchorYBottom + 6;
-  if (top + tb.height > window.innerHeight - 6) top = anchorYTop - tb.height - 6;
+  let natY = anchorYBottom + 6;
+  if (natY + tb.height > window.innerHeight - 6) natY = anchorYTop - tb.height - 6;
+  selToolbarNatural = { x: natX, y: natY };
+  // Shift by the user's persisted drag offset (if any), then re-clamp to the viewport.
+  const off = selOffset();
+  const left = Math.max(6, Math.min(window.innerWidth - tb.width - 6, natX + off.dx));
+  const top = Math.max(6, Math.min(window.innerHeight - tb.height - 6, natY + off.dy));
   selToolbar.style.left = `${left}px`;
   selToolbar.style.top = `${top}px`;
   toolbarPos = { x: left, y: top };
 }
+// Dragging the grip persists an OFFSET from the natural anchor, so the toolbar keeps following
+// the selection but lands where the user prefers; double-click re-anchors (clears the offset).
+makeDraggable(selToolbar, selGrip, (left, top) =>
+  saveState({ selToolbarOffset: { dx: left - selToolbarNatural.x, dy: top - selToolbarNatural.y } })
+);
+selGrip.addEventListener("dblclick", () => {
+  saveState({ selToolbarOffset: { dx: 0, dy: 0 } });
+  showSelToolbar();
+});
 function hideSelToolbar(): void {
   selToolbar.hidden = true;
 }
@@ -1205,6 +1356,10 @@ let activePopoverId: string | null = null;
 const popover = document.createElement("div");
 popover.id = "note-popover";
 popover.hidden = true;
+// Draggable header: grabbing it moves the window and persists the spot; double-click re-docks.
+const popHeader = el("div", "note-header");
+popHeader.appendChild(el("span", "note-header-title", "Note"));
+popHeader.appendChild(el("span", "note-header-hint", "drag to move"));
 const popQuote = document.createElement("div");
 popQuote.className = "note-quote";
 const popText = document.createElement("textarea");
@@ -1245,21 +1400,35 @@ popClose.className = "note-close";
 popClose.textContent = "Close";
 popClose.addEventListener("click", closeNotePopover);
 popActions.append(popDelete, popClose);
-popover.append(popQuote, popText, popColors, popActions);
+popover.append(popHeader, popQuote, popText, popColors, popActions);
 // Keep clicks inside the popover from reaching the global dismiss handler.
 popover.addEventListener("mousedown", (e) => e.stopPropagation());
 document.body.appendChild(popover);
+// The window can be dragged aside while you work, but the move is NOT persisted: every open
+// starts from a fixed, predictable anchor (the clicked highlight). Otherwise a window dragged
+// somewhere odd in one session would reappear there — disorientingly — on the next.
+makeDraggable(popover, popHeader, () => {});
 
-function openNotePopover(a: Annotation, x: number, y: number): void {
+// Open the note window for annotation `a` at a fixed anchor: the caller-supplied click/selection
+// point, or screen-center when there's none (e.g. opened from the Notes panel). Never restores a
+// previous drag position.
+function openNotePopover(a: Annotation, x?: number, y?: number): void {
   activePopoverId = a.id;
   popQuote.textContent = a.text.length > 240 ? `${a.text.slice(0, 240)}…` : a.text;
   popText.value = a.note;
   popover.hidden = false; // unhide before measuring
   const pb = popover.getBoundingClientRect();
-  const left = Math.max(6, Math.min(window.innerWidth - pb.width - 6, x));
-  const top = Math.max(6, Math.min(window.innerHeight - pb.height - 6, y + 8));
-  popover.style.left = `${left}px`;
-  popover.style.top = `${top}px`;
+  let left: number;
+  let top: number;
+  if (typeof x === "number" && typeof y === "number") {
+    left = x;
+    top = y + 8;
+  } else {
+    left = (window.innerWidth - pb.width) / 2;
+    top = (window.innerHeight - pb.height) / 2;
+  }
+  popover.style.left = `${Math.max(6, Math.min(window.innerWidth - pb.width - 6, left))}px`;
+  popover.style.top = `${Math.max(6, Math.min(window.innerHeight - pb.height - 6, top))}px`;
   popText.focus();
 }
 function closeNotePopover(): void {

@@ -6,7 +6,15 @@
 import type { Annotation, AnnotationRect } from "../protocol";
 
 /** Highlight palette. The first entry is the default; keys are stored in `Annotation.color`. */
-export const ANNOTATION_COLORS = ["yellow", "green", "blue", "pink"] as const;
+export const ANNOTATION_COLORS = [
+  "yellow",
+  "green",
+  "blue",
+  "pink",
+  "orange",
+  "purple",
+  "red",
+] as const;
 export type AnnotationColor = (typeof ANNOTATION_COLORS)[number];
 export const DEFAULT_COLOR: AnnotationColor = "yellow";
 

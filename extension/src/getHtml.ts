@@ -74,6 +74,7 @@ export function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): stri
     </div>
     <div id="view-controls">
       <span id="summary-status" hidden></span>
+      <button id="notes-toggle" aria-pressed="false" title="Search this PDF's notes &amp; highlights">Notes</button>
       <button id="summary-toggle" aria-pressed="false" title="Show/hide summary">Summary</button>
     </div>
     <div id="splitter" role="separator" aria-orientation="vertical" tabindex="0"></div>
