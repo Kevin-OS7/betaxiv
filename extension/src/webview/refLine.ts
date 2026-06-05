@@ -30,9 +30,11 @@ export function buildRefLine(
 /**
  * The full Copy^p clipboard payload: the (optional) Ref line, then the selection wrapped in
  * `===SELECTED TEXT===` / `===/SELECTED TEXT===` fences so the quoted text's boundaries are
- * unambiguous (it can span multiple lines). An empty `ref` yields just the fenced text.
+ * unambiguous (it can span multiple lines). The closing fence is followed by a blank line so the
+ * payload ends cleanly and separates from anything pasted after it. An empty `ref` yields just the
+ * fenced text.
  */
 export function buildCopyPayload(ref: string, text: string): string {
-  const body = `===SELECTED TEXT===\n${text}\n===/SELECTED TEXT===`;
+  const body = `===SELECTED TEXT===\n${text}\n===/SELECTED TEXT===\n\n`;
   return ref ? `${ref}\n${body}` : body;
 }

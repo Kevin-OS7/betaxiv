@@ -52,13 +52,13 @@ test("buildRefLine quotes a path containing spaces and escapes quotes in fields"
 test("buildCopyPayload fences the selection under the Ref line", () => {
   assert.equal(
     buildCopyPayload("Ref path=papers/foo.pdf, page=4", "the quick\nbrown fox"),
-    "Ref path=papers/foo.pdf, page=4\n===SELECTED TEXT===\nthe quick\nbrown fox\n===/SELECTED TEXT==="
+    "Ref path=papers/foo.pdf, page=4\n===SELECTED TEXT===\nthe quick\nbrown fox\n===/SELECTED TEXT===\n\n"
   );
 });
 
 test("buildCopyPayload with no Ref yields just the fenced text", () => {
   assert.equal(
     buildCopyPayload("", "hello"),
-    "===SELECTED TEXT===\nhello\n===/SELECTED TEXT==="
+    "===SELECTED TEXT===\nhello\n===/SELECTED TEXT===\n\n"
   );
 });
