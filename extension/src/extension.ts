@@ -284,6 +284,63 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
     post({ type: "docs", docs, docRelPaths, invalid, docsSkillName: DOCS_SKILL_NAME });
   };
 
+  // A cheap fingerprint of the docs dir (file names + mtime + size). Lets a polling fallback
+  // re-read/re-post ONLY when something actually changed, so we never flicker the open doc or
+  // its selection. "" means the dir is absent (a stable "no docs yet" signature).
+  const docsSignature = async (): Promise<string> => {
+    if (!docsDirUri) return "";
+    let entries: [string, vscode.FileType][];
+    try {
+      entries = await vscode.workspace.fs.readDirectory(docsDirUri);
+    } catch {
+      return ""; // dir not created yet
+    }
+    const parts: string[] = [];
+    for (const [name, type] of entries) {
+      if (type !== vscode.FileType.File || !name.endsWith(".doc.json")) continue;
+      try {
+        const st = await vscode.workspace.fs.stat(vscode.Uri.joinPath(docsDirUri, name));
+        parts.push(`${name}:${st.mtime}:${st.size}`);
+      } catch {
+        parts.push(name); // include the name even if stat raced a delete
+      }
+    }
+    return parts.sort().join("|");
+  };
+
+  // Re-post docs only when the signature changed since the last post. Both the OS file watcher
+  // and the polling fallback funnel through here; `undefined` start makes the first call always
+  // post. WHY a poll at all: on WSL2 / network filesystems VS Code's watcher routinely misses
+  // events for files written by an external process (the user's agent CLI) — most reliably the
+  // FIRST doc, which also creates the .betaxiv/docs/<id>/ dir the watcher was meant to cover.
+  let lastDocsSig: string | undefined;
+  const refreshDocs = async () => {
+    const sig = await docsSignature();
+    if (sig === lastDocsSig) return;
+    lastDocsSig = sig;
+    await sendDocs();
+  };
+
+  // Same guard for the summary (single file): re-post only when its mtime/size changed, so the
+  // reveal/poll fallback never re-renders (and scrolls back) an unchanged summary pane. "" = the
+  // file doesn't exist yet (a stable "not summarized" signature).
+  let lastSummarySig: string | undefined;
+  const summarySignature = async (): Promise<string> => {
+    if (!summaryUri) return "";
+    try {
+      const st = await vscode.workspace.fs.stat(summaryUri);
+      return `${st.mtime}:${st.size}`;
+    } catch {
+      return "";
+    }
+  };
+  const refreshSummary = async () => {
+    const sig = await summarySignature();
+    if (sig === lastSummarySig) return;
+    lastSummarySig = sig;
+    await sendSummary();
+  };
+
   // Delete an AIDoc file on explicit user action. Resolves the target either by relPath (must be
   // inside this paper's docs dir and a .doc.json) or by matching a valid doc's content id-keyed
   // `doc.id`. Confirms first, then deletes to the trash (recoverable). The watcher re-sends docs.
@@ -336,7 +393,7 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
       void vscode.window.showErrorMessage(`BetaXiv: could not delete the doc — ${(err as Error).message}`);
       return;
     }
-    void sendDocs(); // refresh immediately (the watcher also fires)
+    void refreshDocs(); // refresh immediately (the watcher also fires)
   };
 
   // Delete this paper's summary file on explicit user action (confirm → trash, falling back to a
@@ -359,6 +416,7 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
       void vscode.window.showErrorMessage(`BetaXiv: could not delete the summary — ${(err as Error).message}`);
       return;
     }
+    lastSummarySig = ""; // keep the guard in sync so a later reveal/poll re-sends correctly
     post({ type: "summary-missing", summaryRelPath, skillName: SKILL_NAME }); // immediate; watcher also fires
   };
 
@@ -406,8 +464,8 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
           cMapUri: vendor("cmaps") + "/",
           standardFontUri: vendor("standard_fonts") + "/",
         });
-        void sendSummary();
-        void sendDocs();
+        void refreshSummary();
+        void refreshDocs();
         void sendAnnotations();
       } else if (msg?.type === "annotations-save") {
         void saveAnnotations(Array.isArray(msg.annotations) ? msg.annotations : []);
@@ -429,13 +487,14 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
     let debounce: ReturnType<typeof setTimeout> | undefined;
     const onChange = () => {
       if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => void sendSummary(), 150);
+      debounce = setTimeout(() => void refreshSummary(), 150);
     };
     watcher.onDidCreate(onChange);
     watcher.onDidChange(onChange);
-    watcher.onDidDelete(() =>
-      post({ type: "summary-missing", summaryRelPath, skillName: SKILL_NAME })
-    );
+    watcher.onDidDelete(() => {
+      lastSummarySig = ""; // keep the guard in sync so a later reveal/poll re-sends correctly
+      post({ type: "summary-missing", summaryRelPath, skillName: SKILL_NAME });
+    });
     disposables.push(
       watcher,
       new vscode.Disposable(() => {
@@ -451,15 +510,46 @@ async function openReader(context: vscode.ExtensionContext, pdfUri: vscode.Uri):
     let docsDebounce: ReturnType<typeof setTimeout> | undefined;
     const onDocsChange = () => {
       if (docsDebounce) clearTimeout(docsDebounce);
-      docsDebounce = setTimeout(() => void sendDocs(), 150);
+      docsDebounce = setTimeout(() => void refreshDocs(), 150);
     };
     docsWatcher.onDidCreate(onDocsChange);
     docsWatcher.onDidChange(onDocsChange);
     docsWatcher.onDidDelete(onDocsChange);
+
+    // Polling fallback for filesystems the watcher can't be trusted on (WSL2, network mounts).
+    // Each visible tick recomputes the full docsSignature() (a readdir + a per-file stat — cheap
+    // for a handful of docs) and refreshDocs() re-posts ONLY when it changed, so an unchanged dir
+    // is a silent no-op. We must look at the per-file signature, not just the directory's mtime:
+    // the documented regen flow overwrites an existing <id>.doc.json IN PLACE, which doesn't move
+    // the dir mtime — a dir-mtime gate would leave a re-generated doc stale until a tab-back.
+    let pollBusy = false;
+    const docsPoll = setInterval(async () => {
+      if (!panel.visible || pollBusy) return;
+      pollBusy = true;
+      try {
+        await refreshDocs();
+      } finally {
+        pollBusy = false;
+      }
+    }, 2000);
+
+    // Instant catch-up when the user tabs back to the viewer or refocuses the window (the common
+    // path: they kicked off the agent in a terminal, then look back at BetaXiv).
+    const onReveal = () => {
+      if (panel.visible) {
+        void refreshDocs();
+        void refreshSummary();
+      }
+    };
     disposables.push(
       docsWatcher,
       new vscode.Disposable(() => {
         if (docsDebounce) clearTimeout(docsDebounce);
+        clearInterval(docsPoll);
+      }),
+      panel.onDidChangeViewState(onReveal),
+      vscode.window.onDidChangeWindowState((s) => {
+        if (s.focused) onReveal();
       })
     );
   }
