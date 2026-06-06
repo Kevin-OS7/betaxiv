@@ -34,20 +34,28 @@
     "commands": [
       {
         "command": "betaxiv.open",
-        "title": "Open",
-        "category": "BetaXiv",
+        "title": "BetaXiv: Open",
         "icon": "media/betaxiv_logo.svg"
       },
       {
         "command": "betaxiv.installSkill",
         "title": "Install Skills into Workspace",
         "category": "BetaXiv"
+      },
+      {
+        "command": "betaxiv.copyToWorkspace",
+        "title": "BetaXiv: Copy with Data to Workspace…"
       }
     ],
     "menus": {
       "explorer/context": [
         {
           "command": "betaxiv.open",
+          "when": "resourceExtname == .pdf",
+          "group": "navigation"
+        },
+        {
+          "command": "betaxiv.copyToWorkspace",
           "when": "resourceExtname == .pdf",
           "group": "navigation"
         }

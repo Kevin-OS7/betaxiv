@@ -16,6 +16,7 @@ import {
   relPath,
   setTitle,
 } from "./contentIndex";
+import { betaxivDataPaths, legacyDataPaths, uniqueFileName } from "./migratePaths";
 
 const SKILL_NAME = "betaxiv-summarizer";
 const DOCS_SKILL_NAME = "betaxiv-documenter";
@@ -37,6 +38,13 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("betaxiv.installSkill", () =>
       installSkill(context)
+    ),
+    // Copy selected PDFs — together with their summary / AIDocs / notes — into another workspace
+    // folder the user picks. Pure file copy (no model/agent), so it stays within the renderer rules.
+    vscode.commands.registerCommand(
+      "betaxiv.copyToWorkspace",
+      (clicked?: vscode.Uri, selected?: vscode.Uri[]) =>
+        copyPapersToWorkspace(clicked, selected)
     ),
     // Keep index.json's path->id map current when a PDF (or a folder of them) is renamed/moved
     // INSIDE the editor — just re-point the keys, no re-hash, and the summary/annotation files
@@ -518,4 +526,152 @@ async function installSkill(context: vscode.ExtensionContext): Promise<void> {
     `BetaXiv: installed the ${SKILL_NAMES.join(" + ")} skills into ${SKILL_TARGET_DIRS.join(", ")}. ` +
       `Run them with your own agent on a PDF in papers/.`
   );
+}
+
+/**
+ * Copy the selected PDF(s) — each together with its summary / AIDocs / notes — into a destination
+ * workspace folder the user picks. The PDFs land directly in the destination root; their `.betaxiv`
+ * data (keyed by content id) goes under the destination's `.betaxiv/`, so opening a copied PDF
+ * there re-links automatically (the id is recomputed from bytes; index.json regenerates on open).
+ *
+ * This only copies files (no model, no agent — renderer rules). Originals are left untouched (copy,
+ * not move). Name collisions at the destination root are avoided with a " (2)" suffix, and any data
+ * artifact already present at the destination is left as-is rather than clobbered.
+ */
+async function copyPapersToWorkspace(
+  clicked?: vscode.Uri,
+  selected?: vscode.Uri[]
+): Promise<void> {
+  // Multi-select passes `selected`; a single invocation may pass only `clicked`. Keep PDFs only.
+  const pdfs = (selected?.length ? selected : clicked ? [clicked] : []).filter(
+    (u) => u.scheme === "file" && u.fsPath.toLowerCase().endsWith(".pdf")
+  );
+  if (!pdfs.length) {
+    void vscode.window.showErrorMessage("BetaXiv: select one or more PDF files first.");
+    return;
+  }
+  // Pick any folder as the destination library root — it need not be an open workspace. The PDFs
+  // land directly here and their data goes under this folder's `.betaxiv/`; opening a copied PDF
+  // here later (as a workspace) re-links it.
+  const picked = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Copy papers here",
+    title: "Pick a folder to use as the destination library root",
+  });
+  const destUri = picked?.[0];
+  if (!destUri) return;
+  const destName = destUri.path.split("/").filter(Boolean).pop() ?? "the selected folder";
+
+  // Names already at the destination root, so a copy never clobbers an unrelated PDF of the same name.
+  const destRootNames = new Set<string>();
+  try {
+    for (const [name, type] of await vscode.workspace.fs.readDirectory(destUri)) {
+      if (type === vscode.FileType.File) destRootNames.add(name);
+    }
+  } catch {
+    /* destination empty/unreadable → no collisions to avoid */
+  }
+
+  let papers = 0;
+  let summaries = 0;
+  let docs = 0;
+  let notes = 0;
+  let alreadyHere = 0;
+  const problems: string[] = [];
+
+  // Copy one source artifact (file or dir) from `fromRel` (source-root-relative) to `toRel`
+  // (destination-root-relative); never clobbers an existing destination artifact. `fromRel` and
+  // `toRel` differ only for the legacy fallback, which reads a filename-keyed source file but writes
+  // the content-id-keyed destination path.
+  const copyArtifact = async (
+    src: vscode.WorkspaceFolder,
+    fromRel: string,
+    toRel: string
+  ): Promise<"copied" | "absent" | "present"> => {
+    const from = vscode.Uri.joinPath(src.uri, fromRel);
+    try {
+      await vscode.workspace.fs.stat(from);
+    } catch {
+      return "absent";
+    }
+    const to = vscode.Uri.joinPath(destUri, toRel);
+    try {
+      await vscode.workspace.fs.stat(to);
+      return "present"; // leave the destination's copy untouched
+    } catch {
+      /* free at the destination */
+    }
+    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(to, ".."));
+    await vscode.workspace.fs.copy(from, to, { overwrite: false });
+    return "copied";
+  };
+
+  for (const pdf of pdfs) {
+    // A paper already sitting directly in the destination folder is left as-is (avoid duplicating it).
+    if (vscode.Uri.joinPath(pdf, "..").toString() === destUri.toString()) {
+      alreadyHere++;
+      continue;
+    }
+
+    // 1) Copy the PDF into the destination root (flat), avoiding name collisions.
+    const targetName = uniqueFileName(destRootNames, basenameNoExt(pdf), ".pdf");
+    destRootNames.add(targetName);
+    try {
+      await vscode.workspace.fs.copy(pdf, vscode.Uri.joinPath(destUri, targetName), {
+        overwrite: false,
+      });
+      papers++;
+    } catch (err) {
+      problems.push(`${targetName}: ${(err as Error).message}`);
+      continue;
+    }
+
+    // 2) Copy this paper's data (summary / AIDocs / notes). The data lives under the PDF's OWN
+    //    source workspace root, keyed by content id. We require the PDF to be inside a workspace root
+    //    to locate it — no first-root fallback, which could read an unrelated `.betaxiv`. A PDF
+    //    outside every root is copied without data. Skip artifacts absent on the source or already
+    //    at the destination. summary/annotations fall back to the pre-migration filename-keyed file
+    //    (written to the content-id path) so a paper not yet opened since the migration still carries
+    //    its old notes/summary across.
+    const src = vscode.workspace.getWorkspaceFolder(pdf);
+    if (!src) {
+      problems.push(`${targetName}: copied without data (PDF is outside any workspace folder)`);
+      continue;
+    }
+    const resolved = await resolveContentId(src, pdf);
+    if (!resolved) {
+      problems.push(`${targetName}: copied without data (unreadable source)`);
+      continue;
+    }
+    const p = betaxivDataPaths(resolved.id);
+    const legacy = legacyDataPaths(basenameNoExt(pdf));
+    try {
+      let s = await copyArtifact(src, p.summary, p.summary);
+      if (s === "absent") s = await copyArtifact(src, legacy.summary, p.summary);
+      if (s === "copied") summaries++;
+
+      let n = await copyArtifact(src, p.annotations, p.annotations);
+      if (n === "absent") n = await copyArtifact(src, legacy.annotations, p.annotations);
+      if (n === "copied") notes++;
+
+      if ((await copyArtifact(src, p.docsDir, p.docsDir)) === "copied") docs++;
+    } catch (err) {
+      problems.push(`${targetName} data: ${(err as Error).message}`);
+    }
+  }
+
+  const parts = [`${papers} paper${papers === 1 ? "" : "s"}`];
+  if (summaries) parts.push(`${summaries} summaries`);
+  if (docs) parts.push(`${docs} AIDoc set${docs === 1 ? "" : "s"}`);
+  if (notes) parts.push(`${notes} note file${notes === 1 ? "" : "s"}`);
+  if (alreadyHere) parts.push(`${alreadyHere} already in destination`);
+  let msg = `BetaXiv: copied ${parts.join(", ")} into ${destName}.`;
+  if (problems.length) {
+    msg += ` ${problems.length} issue${problems.length === 1 ? "" : "s"}: ${problems
+      .slice(0, 3)
+      .join("; ")}`;
+  }
+  void vscode.window.showInformationMessage(msg);
 }
