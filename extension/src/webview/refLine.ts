@@ -1,6 +1,7 @@
-// Pure builder for the Copy^p "Ref" provenance line: `Ref path=<file>, key=value, …`. NO DOM —
-// unit-testable like findText.ts / cropGeometry.ts. The DOM side (working out the page / figure /
-// heading of a selection) lives in webview.ts and feeds the field values in.
+// Pure builder for the Copy^p provenance: a `path=<file>, key=value, …` line wrapped, alongside
+// the selection, in matching `===…===` fences. NO DOM — unit-testable like findText.ts /
+// cropGeometry.ts. The DOM side (working out the page / figure / heading of a selection) lives in
+// webview.ts and feeds the field values in.
 
 /** Quote a value when it contains whitespace, a comma, or a quote; escape embedded quotes. */
 export function refValue(v: string): string {
@@ -8,11 +9,12 @@ export function refValue(v: string): string {
 }
 
 /**
- * Assemble a Ref line: `Ref path=<path>, <k>=<v>, …`. `path` is always first. Fields with an
+ * Assemble the reference line: `path=<path>, <k>=<v>, …`. `path` is always first. Fields with an
  * undefined or empty value are dropped, so the key set adapts to context (page / fig / sec).
  * Quoting is by type: numbers are bare (`page=4`), free-text string fields are always quoted
  * (`fig="Figure 2"`, `sec="Method"`) so the value boundary is unambiguous, and `path` is bare
- * unless it contains a space/comma. Embedded quotes are escaped.
+ * unless it contains a space/comma. Embedded quotes are escaped. The caller wraps this in
+ * `===REFERENCE===` fences via buildCopyPayload, so no `Ref ` prefix is emitted here.
  */
 export function buildRefLine(
   path: string,
@@ -24,17 +26,17 @@ export function buildRefLine(
     const val = typeof v === "number" ? String(v) : `"${v.replace(/"/g, '\\"')}"`;
     parts.push(`${k}=${val}`);
   }
-  return `Ref ${parts.join(", ")}`;
+  return parts.join(", ");
 }
 
 /**
- * The full Copy^p clipboard payload: the (optional) Ref line, then the selection wrapped in
- * `===SELECTED TEXT===` / `===/SELECTED TEXT===` fences so the quoted text's boundaries are
- * unambiguous (it can span multiple lines). The closing fence is followed by a blank line so the
- * payload ends cleanly and separates from anything pasted after it. An empty `ref` yields just the
- * fenced text.
+ * The full Copy^p clipboard payload: the (optional) reference wrapped in `===REFERENCE===` /
+ * `===/REFERENCE===` fences, then the selection wrapped in `===SELECTED TEXT===` /
+ * `===/SELECTED TEXT===` fences — symmetric so both boundaries are unambiguous (each can span
+ * multiple lines). The closing fence is followed by a blank line so the payload ends cleanly and
+ * separates from anything pasted after it. An empty `ref` yields just the fenced text.
  */
 export function buildCopyPayload(ref: string, text: string): string {
   const body = `===SELECTED TEXT===\n${text}\n===/SELECTED TEXT===\n\n`;
-  return ref ? `${ref}\n${body}` : body;
+  return ref ? `===REFERENCE===\n${ref}\n===/REFERENCE===\n${body}` : body;
 }

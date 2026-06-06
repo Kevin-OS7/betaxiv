@@ -1,4 +1,4 @@
-// Tests for the pure "Ref" provenance line builder used by Copy^p.
+// Tests for the pure reference/provenance builder used by Copy^p.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -21,7 +21,7 @@ test("buildRefLine puts path first and drops empty/undefined fields", () => {
       ["page", 4],
       ["fig", undefined],
     ]),
-    "Ref path=papers/foo.pdf, page=4"
+    "path=papers/foo.pdf, page=4"
   );
 });
 
@@ -31,7 +31,7 @@ test("buildRefLine keeps numbers bare and always quotes free-text fields", () =>
       ["page", 4],
       ["fig", "Figure 2"],
     ]),
-    'Ref path=papers/foo.pdf, page=4, fig="Figure 2"'
+    'path=papers/foo.pdf, page=4, fig="Figure 2"'
   );
   // A single-word sec is still quoted (the field is free text), and the page badge is its own key.
   assert.equal(
@@ -40,19 +40,19 @@ test("buildRefLine keeps numbers bare and always quotes free-text fields", () =>
       ["sec", "Method"],
       ["page", 5],
     ]),
-    'Ref path=x.doc.json, sec="Method", page=5'
+    'path=x.doc.json, sec="Method", page=5'
   );
 });
 
 test("buildRefLine quotes a path containing spaces and escapes quotes in fields", () => {
-  assert.equal(buildRefLine("my papers/a b.pdf", []), 'Ref path="my papers/a b.pdf"');
-  assert.equal(buildRefLine("x", [["sec", 'A "B"']]), 'Ref path=x, sec="A \\"B\\""');
+  assert.equal(buildRefLine("my papers/a b.pdf", []), 'path="my papers/a b.pdf"');
+  assert.equal(buildRefLine("x", [["sec", 'A "B"']]), 'path=x, sec="A \\"B\\""');
 });
 
-test("buildCopyPayload fences the selection under the Ref line", () => {
+test("buildCopyPayload fences the reference and the selection symmetrically", () => {
   assert.equal(
-    buildCopyPayload("Ref path=papers/foo.pdf, page=4", "the quick\nbrown fox"),
-    "Ref path=papers/foo.pdf, page=4\n===SELECTED TEXT===\nthe quick\nbrown fox\n===/SELECTED TEXT===\n\n"
+    buildCopyPayload("path=papers/foo.pdf, page=4", "the quick\nbrown fox"),
+    "===REFERENCE===\npath=papers/foo.pdf, page=4\n===/REFERENCE===\n===SELECTED TEXT===\nthe quick\nbrown fox\n===/SELECTED TEXT===\n\n"
   );
 });
 

@@ -2118,9 +2118,10 @@ function refTextWithoutBadge(el: Element | null): string {
   return refClip(refCollapse(clone.textContent));
 }
 
-// Copy the PDF selection as: `Ref path=<pdf>, page=<N>[, fig="…"]` then the text. The page comes
-// from the live selection anchor (a multi-page selection anchors to its start page); `fig` is added
-// when the selection lands inside a cataloged figure. Uses the reflowed PDF text when available.
+// Copy the PDF selection as a ===REFERENCE=== fence (`path=<pdf>, page=<N>[, fig="…"]`) then the
+// text in a ===SELECTED TEXT=== fence. The page comes from the live selection anchor (a multi-page
+// selection anchors to its start page); `fig` is added when the selection lands inside a cataloged
+// figure. Uses the reflowed PDF text when available.
 function copySelectionWithPath(): void {
   const text = reflowCurrentSelection() ?? window.getSelection()?.toString() ?? "";
   if (!text.trim()) return;
@@ -2236,7 +2237,8 @@ function summarySelectionRef(): { fig?: string; sec?: string; page?: number } {
   return { sec: refTextWithoutBadge(headingEl) || undefined, page: refPageFromBadge(headingEl) };
 }
 
-// Copy the summary/AIDoc selection as: `Ref path=<artifact>[, fig="…"|sec="…"][, page=N]` then text.
+// Copy the summary/AIDoc selection as a ===REFERENCE=== fence
+// (`path=<artifact>[, fig="…"|sec="…"][, page=N]`) then text in a ===SELECTED TEXT=== fence.
 function copyDocSelectionWithPath(): void {
   const text = window.getSelection()?.toString() ?? "";
   if (!text.trim()) return;
