@@ -7,19 +7,24 @@
 **Read papers in VS Code with the frontier model you _already pay for._**
 No second subscription. No per-token API key. Nothing leaves your machine.
 
+_An alphaXiv-style paper-reading experience — the real PDF beside an AI-written structured read,
+figures and math intact — without ever leaving your editor._
+
 [![Marketplace](https://img.shields.io/visual-studio-marketplace/v/kevin-os7.betaxiv?label=Marketplace&color=2c8af7)](https://marketplace.visualstudio.com/items?itemName=kevin-os7.betaxiv)
 [![Installs](https://img.shields.io/visual-studio-marketplace/i/kevin-os7.betaxiv?color=2c8af7)](https://marketplace.visualstudio.com/items?itemName=kevin-os7.betaxiv)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
 
-<!-- Add a demo GIF/screenshot here before publishing — PDF on the left, structured summary on
-     the right is the single most convincing asset. e.g.:
-<div align="center"><img src="media/screenshot.png" alt="BetaXiv: PDF left, AI summary right" width="900" /></div>
--->
+<div align="center">
 
-**Think alphaXiv-style AI-assisted paper reading — but inside your editor, fully local, and
-powered by the agent subscription you already pay for.**
+<img src="media/screenshot.png" alt="BetaXiv in VS Code: the real PDF on the left, an AI-generated structured summary on the right" width="900" />
+
+</div>
+
+**The same AI-assisted reading flow — structured explanations and on-demand docs beside the
+paper — but inside your editor, fully local, and powered by the agent subscription you already
+pay for.**
 
 The real PDF on the **left**. An AI-generated **structured summary** — plus any **AIDocs** you
 ask for — on the **right**. Both are written by **your own coding agent** (Claude Code / Codex /
