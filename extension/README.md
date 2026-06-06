@@ -1,18 +1,10 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/Kevin-OS7/betaxiv/main/extension/media/betaxiv_logo.png" alt="BetaXiv" width="120" />
-
-# BetaXiv
-
 **Read papers in VS Code with the frontier model you _already pay for._**
 No second subscription. No per-token API key. Nothing leaves your machine.
 
 _An alphaXiv-style paper-reading experience — the real PDF beside an AI-written structured read,
 figures and math intact — without ever leaving your editor._
-
-[![Marketplace](https://img.shields.io/visual-studio-marketplace/v/kevin-os7.betaxiv?label=Marketplace&color=2c8af7)](https://marketplace.visualstudio.com/items?itemName=kevin-os7.betaxiv)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/kevin-os7.betaxiv?color=2c8af7)](https://marketplace.visualstudio.com/items?itemName=kevin-os7.betaxiv)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
 
