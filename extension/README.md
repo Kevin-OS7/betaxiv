@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="media/betaxiv_logo.png" alt="BetaXiv" width="120" />
+<img src="https://raw.githubusercontent.com/Kevin-OS7/betaxiv/main/extension/media/betaxiv_logo.png" alt="BetaXiv" width="120" />
 
 # BetaXiv
 
@@ -18,7 +18,7 @@ figures and math intact — without ever leaving your editor._
 
 <div align="center">
 
-<img src="media/screenshot.png" alt="BetaXiv in VS Code: the real PDF on the left, an AI-generated structured summary on the right" width="900" />
+<img src="https://raw.githubusercontent.com/Kevin-OS7/betaxiv/main/extension/media/screenshot.png" alt="BetaXiv in VS Code: the real PDF on the left, an AI-generated structured summary on the right" width="900" />
 
 </div>
 
