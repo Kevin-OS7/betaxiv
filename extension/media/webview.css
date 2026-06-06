@@ -790,8 +790,12 @@ figure.fig figcaption {
 }
 
 .fig-image-holder {
-  /* Scroll horizontally when a zoomed-in figure grows past the column width. */
-  overflow-x: auto;
+  /* Scroll when a zoomed-in figure grows past the column width OR past ~80% of the editor
+     height. Horizontal already scrolled; the vertical cap stops a tall zoom from running the
+     page off endlessly — instead it pins at 80vh and a scrollbar appears on whichever axis
+     overflows, so the figure stays in a fixed viewport you pan around. */
+  overflow: auto;
+  max-height: 80vh;
   text-align: center;
   cursor: zoom-in; /* hint that clicking enters per-figure zoom */
 }
