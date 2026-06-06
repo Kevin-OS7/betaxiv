@@ -90,6 +90,7 @@ the "run the skill" guidance.
 |---|---|
 | **BetaXiv: Open** | Open the selected PDF with PDF on the left, summary/AIDocs on the right |
 | **BetaXiv: Install Skills into Workspace** | Copy the summarizer + documenter skills into your workspace |
+| **BetaXiv: Copy with Data to Workspace…** | Right-click PDF(s) in the Explorer → copy each paper **together with its summary, AIDocs, and notes** into another folder you pick. The `.betaxiv` data is keyed by content id, so opening a copied PDF there re-links automatically — moving a paper between libraries/workspaces keeps everything attached. |
 
 ## Privacy & compliance
 
