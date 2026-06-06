@@ -17,6 +17,9 @@
   "engines": {
     "vscode": "^1.96.0"
   },
+  "extensionKind": [
+    "workspace"
+  ],
   "categories": [
     "Visualization",
     "Other"
