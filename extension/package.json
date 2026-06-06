@@ -48,6 +48,12 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "betaxiv.copyToWorkspace",
+          "when": "false"
+        }
+      ],
       "explorer/context": [
         {
           "command": "betaxiv.open",

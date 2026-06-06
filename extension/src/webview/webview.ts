@@ -2071,6 +2071,9 @@ function addNoteFromSelection(): void {
   window.getSelection()?.removeAllRanges();
   currentSelectionAnchor = null;
   hideSelToolbar();
+  // Mark it provisional so closing without a note or a color choice discards it (see closeNotePopover).
+  provisionalAnnoId = a.id;
+  provisionalColorChosen = false;
   openNotePopover(a, pos.x, pos.y);
 }
 
@@ -2268,6 +2271,13 @@ function copyDocSelectionWithPath(): void {
 
 // Note popover: view/edit a highlight's note, recolor, or delete it.
 let activePopoverId: string | null = null;
+// A "provisional" annotation is one the Note button just created (default color, empty note)
+// purely to host the popover. If the popover is closed with the note still empty and no color
+// explicitly chosen, it's discarded — so a Note click that's abandoned leaves no stray highlight.
+// Clicking an EXISTING highlight (or opening from the Notes panel) never sets this, so those are
+// never auto-removed on close.
+let provisionalAnnoId: string | null = null;
+let provisionalColorChosen = false;
 const popover = document.createElement("div");
 popover.id = "note-popover";
 popover.hidden = true;
@@ -2306,6 +2316,7 @@ for (const color of ANNOTATION_COLORS) {
   sw.title = `Recolor (${color})`;
   sw.addEventListener("click", () => {
     if (!activePopoverId) return;
+    if (activePopoverId === provisionalAnnoId) provisionalColorChosen = true; // an explicit color commits it
     annoStore.update(activePopoverId, { color, updatedAt: new Date().toISOString() });
     repaintAllAnnotations();
   });
@@ -2356,8 +2367,20 @@ function openNotePopover(a: Annotation, x?: number, y?: number): void {
   popText.focus();
 }
 function closeNotePopover(): void {
+  const id = activePopoverId;
   popover.hidden = true;
   activePopoverId = null;
+  // An abandoned Note: created by the Note button, closed with the note still empty and no color
+  // explicitly chosen → discard it so no stray default highlight (or empty note) is left behind.
+  if (id && id === provisionalAnnoId) {
+    const a = annoStore.get(id);
+    if (a && !a.note.trim() && !provisionalColorChosen) {
+      annoStore.remove(id);
+      repaintAllAnnotations();
+    }
+  }
+  provisionalAnnoId = null;
+  provisionalColorChosen = false;
 }
 
 // Starting any new gesture outside the transient UI dismisses it (the toolbar re-appears on
