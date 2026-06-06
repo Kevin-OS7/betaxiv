@@ -199,17 +199,6 @@ body {
   background: #ff6f6f;
 }
 
-/* A small dot marking a highlight that carries a note. Lives outside the fills wrapper so the
-   fill opacity doesn't fade it. */
-.anno-note-marker {
-  position: absolute;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #1f6feb;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7);
-}
-
 /* --- Selection toolbar (color swatches + Note) ------------------------------ */
 #sel-toolbar {
   position: fixed;

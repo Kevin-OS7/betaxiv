@@ -1744,11 +1744,9 @@ function scheduleAnnoSave(items: Annotation[]): void {
 // the page's current rendered size).
 function paintAnnoLayer(layer: HTMLElement, pageNum: number, width: number, height: number): void {
   // Fills go in an opacity-bearing wrapper so overlapping rects don't accumulate alpha (the
-  // overlap reads at the same strength as the rest). Note markers go straight on the layer so
-  // the layer opacity doesn't fade them out.
+  // overlap reads at the same strength as the rest).
   const fills = document.createElement("div");
   fills.className = "anno-fills";
-  const markers = document.createDocumentFragment();
   for (const a of annoStore.byPage(pageNum)) {
     a.rects.forEach((r) => {
       const box = denormRect(r, width, height);
@@ -1760,16 +1758,8 @@ function paintAnnoLayer(layer: HTMLElement, pageNum: number, width: number, heig
       div.style.height = `${box.height}px`;
       fills.appendChild(div);
     });
-    if (a.note && a.rects.length) {
-      const last = denormRect(a.rects[a.rects.length - 1], width, height);
-      const marker = document.createElement("div");
-      marker.className = "anno-note-marker";
-      marker.style.left = `${last.left + last.width - 3}px`;
-      marker.style.top = `${last.top - 3}px`;
-      markers.appendChild(marker);
-    }
   }
-  layer.replaceChildren(fills, markers);
+  layer.replaceChildren(fills);
 }
 
 // Repaint every currently-rendered page (after load, edit, delete, or recolor).
@@ -2306,7 +2296,7 @@ popText.rows = 4;
 popText.addEventListener("input", () => {
   if (!activePopoverId) return;
   annoStore.update(activePopoverId, { note: popText.value, updatedAt: new Date().toISOString() });
-  repaintAllAnnotations(); // toggle the note marker live
+  repaintAllAnnotations(); // keep the Notes panel index live as the user types
 });
 const popColors = document.createElement("div");
 popColors.className = "note-colors";
